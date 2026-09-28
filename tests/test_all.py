@@ -58,6 +58,8 @@ class FakeTelegram(BaseHTTPRequestHandler):
     """Минимальный Bot API: getFile, скачивание файла, sendMessage, sendDocument."""
     sent = []
     file_bytes = b""
+    claude_requests = []
+    claude_reply = {}
 
     def log_message(self, *a):
         pass
@@ -80,6 +82,17 @@ class FakeTelegram(BaseHTTPRequestHandler):
         method = self.path.rsplit("/", 1)[-1]
         if method == "getFile":
             return self._ok({"file_path": "documents/f.xlsx"})
+        if self.path.endswith("/v1/messages"):
+            req = json.loads(data)
+            FakeTelegram.claude_requests.append(req)
+            body = json.dumps({"stop_reason": "tool_use", "content": [
+                {"type": "tool_use", "name": "save_project",
+                 "input": FakeTelegram.claude_reply}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         FakeTelegram.sent.append((method, data))
         self._ok({})
 
@@ -90,11 +103,14 @@ class BotFlow(unittest.TestCase):
         cls.srv = HTTPServer(("127.0.0.1", 0), FakeTelegram)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{cls.srv.server_port}"
-        cls.bot = bot.Bot(bot.Api("TOKEN", base))
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.bot = bot.Bot(bot.Api("TOKEN", base), claude_key="KEY",
+                          claude_url=base + "/v1/messages", state_dir=Path(cls.tmp.name))
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
+        cls.tmp.cleanup()
 
     def setUp(self):
         FakeTelegram.sent = []
@@ -127,6 +143,38 @@ class BotFlow(unittest.TestCase):
         self.bot.handle(self.msg(text="/start"))
         methods = [m for m, _ in FakeTelegram.sent]
         self.assertEqual(methods, ["sendDocument", "sendMessage"])
+
+    def test_text_to_pdf_and_edit(self):
+        FakeTelegram.claude_reply = {
+            "summary": "Шкаф с ПЛК, 2 входа.",
+            "questions": ["Артикул ПЛК?"],
+            "project": {"code": "ВКС.ТЕСТ.1", "customer": "Заказчик"},
+            "spec": [{"designation": "CPU", "name": "Контроллер", "qty": "1"}],
+            "plc": [{"key": "CPU", "tag": "CPU", "type": "AM600", "kind": "in",
+                     "channels": [
+                         {"pin": "A1", "desc": "Датчик", "wire": ["CPU-DI0", "WH", "0,5"],
+                          "link": "-XT1:1"},
+                         {"pin": "A2", "desc": "Реле", "element": "ттр", "device": "K1"}]}]}
+        self.bot.handle(self.msg(text="Шкаф ВКС.ТЕСТ.1, CPU AM600, на A1 датчик..."))
+        docs = [d for m, d in FakeTelegram.sent if m == "sendDocument"]
+        self.assertEqual(len(docs), 2)                      # PDF + Excel
+        self.assertIn(b"%PDF", docs[0])
+        texts = [json.loads(d)["text"] for m, d in FakeTelegram.sent if m == "sendMessage"]
+        self.assertTrue(any("Артикул ПЛК?" in t for t in texts))
+        state = self.bot.load_state(42)
+        self.assertEqual(state["project"]["code"], "ВКС.ТЕСТ.1")
+        self.assertEqual(state["plc"][0]["channels"][1]["device"], "-K1")
+        # правка: модель присылает только спецификацию — ПЛК остаётся
+        FakeTelegram.sent = []
+        FakeTelegram.claude_reply = {"summary": "Добавил блок питания.",
+                                     "spec": [{"designation": "CPU", "name": "Контроллер"},
+                                              {"designation": "U1", "name": "БП 24В"}]}
+        self.bot.handle(self.msg(text="добавь блок питания U1"))
+        sent_ctx = FakeTelegram.claude_requests[-1]["messages"][0]["content"]
+        self.assertIn("ВКС.ТЕСТ.1", sent_ctx)                # текущий проект ушёл в модель
+        state = self.bot.load_state(42)
+        self.assertEqual(len(state["spec"]), 2)
+        self.assertEqual(len(state["plc"]), 1)
 
     def test_not_allowed(self):
         b = bot.Bot(self.bot.api, allowed={1})
