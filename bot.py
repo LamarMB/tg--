@@ -212,12 +212,27 @@ def main() -> int:
                         format="%(asctime)s %(levelname)s %(message)s")
     load_env(ROOT / ".env")
     token = os.environ.get("BOT_TOKEN", "").strip()
+    if not token and sys.stdin and sys.stdin.isatty():
+        # Первый запуск: спрашиваем токен и сохраняем его в .env
+        token = input("Вставьте токен бота от @BotFather и нажмите Enter: ").strip()
+        if token:
+            with open(ROOT / ".env", "a", encoding="utf-8") as f:
+                f.write(f"BOT_TOKEN={token}\n")
+            print("Токен сохранён в .env")
     if not token:
         print("Не задан BOT_TOKEN (в .env или переменной окружения).", file=sys.stderr)
         return 1
     allowed = {int(x) for x in re.findall(r"-?\d+", os.environ.get("ALLOWED_USERS", ""))}
     api = Api(token, os.environ.get("TELEGRAM_API", "https://api.telegram.org"))
-    Bot(api, allowed or None).run()
+    try:
+        Bot(api, allowed or None).run()
+    except RuntimeError as e:
+        print(f"Не удалось подключиться к Telegram: {e}\n"
+              "Проверьте токен в файле .env (строка BOT_TOKEN=...).", file=sys.stderr)
+        return 1
+    except urllib.error.URLError as e:
+        print(f"Нет связи с api.telegram.org: {e.reason}", file=sys.stderr)
+        return 1
     return 0
 
 
