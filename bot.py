@@ -44,7 +44,8 @@ HELP = (
     "• Excel. /template — пустой шаблон, /example — заполненный пример. "
     "Заполните и пришлите файлом.\n\n"
     "В ответ — PDF и Excel с тем, что я понял (его можно поправить и прислать обратно).\n"
-    "/project — текущий проект в Excel, /new — начать новый проект."
+    "/project — текущий проект в Excel, /new — начать новый проект, "
+    "/key sk-ant-… — задать ключ Claude API."
 )
 
 
@@ -57,6 +58,15 @@ def load_env(path: Path) -> None:
             continue
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def set_env_value(path: Path, name: str, value: str) -> None:
+    """Записать/заменить NAME=value в файле .env."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    lines = [ln for ln in lines if not ln.strip().startswith(name + "=")]
+    lines.append(f"{name}={value}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[name] = value
 
 
 class Api:
@@ -180,6 +190,8 @@ class Bot:
         elif cmd == "/example":
             self.api.send_document(chat, EXAMPLE, "пример_2196_СС1.xlsx",
                                    "Пример заполнения (по шкафу ВКС.АСПУ.2196.СС1).")
+        elif cmd == "/key":
+            self.on_key(chat, mid, user, text)
         elif cmd == "/new":
             self.save_state(chat, {})
             self.api.send_message(chat, "Начинаем новый проект. Опишите его текстом "
@@ -223,11 +235,39 @@ class Bot:
             self.api.send_document(chat, xlsx, self._name(document, ".xlsx"),
                                    "Исходные данные — можно поправить и прислать обратно.")
 
+    def on_key(self, chat: int, mid: int, user: int, text: str) -> None:
+        """/key sk-ant-... — сохранить ключ Claude API в .env.
+
+        Менять уже заданный ключ может только пользователь из ALLOWED_USERS."""
+        parts = text.split(maxsplit=1)
+        key = parts[1].strip() if len(parts) > 1 else ""
+        if self.claude_key and not (self.allowed and user in self.allowed):
+            self.api.send_message(chat, "Ключ уже задан. Поменять его может только "
+                                        "пользователь из ALLOWED_USERS в .env.", mid)
+            return
+        if not key.startswith("sk-ant-"):
+            self.api.send_message(chat, "Пришлите так: /key sk-ant-...", mid)
+            return
+        try:
+            assistant.ask(key, {}, "проверка связи: шифр ТЕСТ", self.claude_model,
+                          self.claude_url, timeout=120)
+        except assistant.AssistantError as e:
+            self.api.send_message(chat, f"Ключ не подошёл: {e}", mid)
+            return
+        set_env_value(ROOT / ".env", "ANTHROPIC_API_KEY", key)
+        self.claude_key = key
+        try:
+            self.api.call("deleteMessage", {"chat_id": chat, "message_id": mid})
+        except Exception:
+            pass
+        self.api.send_message(chat, "Ключ Claude API сохранён (сообщение с ним удалил). "
+                                    "Теперь можно описывать проект текстом.")
+
     def on_text(self, chat: int, mid: int, text: str) -> None:
         if not self.claude_key:
-            self.api.send_message(chat, "Понимание текста не настроено: в файл .env нужно "
-                                        "добавить ANTHROPIC_API_KEY. Пока можно "
-                                        "работать через Excel (/template).", mid)
+            self.api.send_message(chat, "Понимание текста не настроено. Пришлите ключ "
+                                        "Claude API командой: /key sk-ant-...\n"
+                                        "Пока можно работать через Excel (/template).", mid)
             return
         self.api.send_message(chat, "Разбираю описание, это займёт до пары минут…", mid)
         self.api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
@@ -340,11 +380,6 @@ def main() -> int:
     allowed = {int(x) for x in re.findall(r"-?\d+", os.environ.get("ALLOWED_USERS", ""))}
     api = Api(token, os.environ.get("TELEGRAM_API", "https://api.telegram.org"))
     claude_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not claude_key and sys.stdin and sys.stdin.isatty() and not os.environ.get("ANTHROPIC_ASKED"):
-        claude_key = input("Ключ Claude API (sk-ant-...) для понимания текста; "
-                           "Enter — пропустить: ").strip()
-        with open(ROOT / ".env", "a", encoding="utf-8") as f:
-            f.write(f"ANTHROPIC_API_KEY={claude_key}\n" if claude_key else "ANTHROPIC_ASKED=1\n")
     if not claude_key:
         log.info("ANTHROPIC_API_KEY не задан — работаю только с Excel")
     try:

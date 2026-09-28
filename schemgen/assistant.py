@@ -48,8 +48,20 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    feed/feed_wire — питание контактов модуля входов (стрелка слева), common/common_wire
    — общий провод катушек модуля выходов; npn=true, если выходы коммутируют минус.
    desc — назначение вывода, переносы строк можно ставить «\\n».
+   Марку провода придумывай всегда: вход «<модуль>-DI<n>» (n с 0), выход
+   «<модуль>-Q<n>», общий — по клемме («XM1-M3»). Ссылки на устройства в link, feed,
+   common пиши с минусом: «-1XT1:1».
 7. summary — 1–3 предложения по-русски: что понял и что изменил.
 """
+
+def _str(desc: str) -> dict:
+    return {"type": "string", "description": desc}
+
+
+WIRE = {"type": "object", "description": "Провод: марка, цвет, сечение",
+        "properties": {"mark": _str("марка провода, напр. CPU-DI0, A1-Q3, XM1-M4, 1QFU5-1"),
+                       "color": _str("цвет: WH, BK, RD, BU, DK BU, GNYE ..."),
+                       "section": _str("сечение, мм², напр. 0,5")}}
 
 TOOL = {
     "name": "save_project",
@@ -57,43 +69,70 @@ TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "summary": {"type": "string"},
-            "questions": {"type": "array", "items": {"type": "string"}},
-            "project": {
-                "type": "object",
-                "properties": {k: {"type": "string"} for k in [
-                    "code", "system_name", "contractor", "customer", "line", "product",
-                    "location", "litera", "mass", "scale", "e3_first_io_sheet"]} | {
-                    "people": {"type": "array", "items": {"type": "object", "properties": {
-                        "role": {"type": "string", "enum": ["Разраб.", "Пров.", "Т.контр.",
-                                                            "Нач.отд.", "Н.контр.", "Утв."]},
-                        "name": {"type": "string"}, "date": {"type": "string"}}}}},
-            },
+            "summary": _str("1–3 предложения: что понял и что изменил"),
+            "questions": {"type": "array", "items": {"type": "string"},
+                          "description": "что уточнить у пользователя (до 6 пунктов)"},
+            "project": {"type": "object", "properties": {
+                "code": _str("шифр без суффикса документа, напр. ВКС.АСПУ.2196.СС1"),
+                "system_name": _str("наименование системы на титуле, напр. "
+                                    "«Автоматизированная система поштучного учета»; "
+                                    "не название шкафа"),
+                "contractor": _str("исполнитель, напр. ООО \"ВЕКАС\""),
+                "customer": _str("заказчик"),
+                "line": _str("линия/объект в основной надписи, напр. «Линия 4а»"),
+                "product": _str("изделие, напр. «Шкаф управления ШУ1»"),
+                "location": _str("место установки / обозначение шкафа, напр. +СС1"),
+                "litera": _str("литера"), "mass": _str("масса"), "scale": _str("масштаб"),
+                "e3_first_io_sheet": _str("номер первого листа ПЛК в схеме Э3 (по умолчанию 2)"),
+                "people": {"type": "array", "items": {"type": "object", "properties": {
+                    "role": {"type": "string", "enum": ["Разраб.", "Пров.", "Т.контр.",
+                                                        "Нач.отд.", "Н.контр.", "Утв."]},
+                    "name": _str("фамилия"), "date": _str("дата, напр. 03.26")}}}}},
             "spec": {"type": "array", "items": {"type": "object", "properties": {
-                k: {"type": "string"} for k in
-                ["designation", "name", "article", "qty", "manufacturer", "note"]}}},
+                "designation": _str("позиционные обозначения: QF1;QF2 или 1K1...1K4"),
+                "name": _str("наименование изделия"),
+                "article": _str("артикул (только если назван пользователем)"),
+                "qty": _str("количество"),
+                "manufacturer": _str("производитель (только если назван)"),
+                "note": _str("примечание")}}},
             "terminals": {"type": "array", "items": {"type": "object", "properties": {
-                "name": {"type": "string"},
+                "name": _str("имя клеммника: X1, 1XT1 ..."),
                 "rows": {"type": "array", "items": {"type": "object", "properties": {
-                    k: {"type": "string"} for k in
-                    ["part_no", "type_no", "section", "marking", "jumper", "cover", "label",
-                     "bridge"]} | {"tier": {"type": ["integer", "null"]}}}}}}},
+                    "part_no": _str("номер изделия (код заказа): CWL.CP2.5, PXC.3214657"),
+                    "type_no": _str("номер типа: CP2.5, CPG2.5, EPCX2.5, PTTBS 1,5"),
+                    "section": _str("сечение клеммы, мм² (у крышек и пластин — пусто)"),
+                    "marking": _str("маркировка клемм (обычно пусто)"),
+                    "jumper": _str("перемычка (обычно пусто)"),
+                    "cover": _str("крышка (обычно пусто)"),
+                    "label": _str("надпись клеммы: L, N, PE, 1, 2; у крышки пусто"),
+                    "tier": {"type": ["integer", "null"],
+                             "description": "0 — одноярусная, 1/2 — ярус двухъярусной, "
+                                            "null — крышка"},
+                    "bridge": _str("номер группы перемычки")}}}}}},
             "plc": {"type": "array", "items": {"type": "object", "properties": {
-                "key": {"type": "string"}, "tag": {"type": "string"},
-                "type": {"type": "string"}, "kind": {"type": "string", "enum": ["in", "out"]},
-                "ref": {"type": "string"}, "feed": {"type": "string"},
-                "feed_wire": {"type": "array", "items": {"type": "string"}},
-                "feed_next": {"type": "string"}, "common": {"type": "string"},
-                "common_wire": {"type": "array", "items": {"type": "string"}},
-                "npn": {"type": "boolean"},
+                "key": _str("уникальное имя модуля: CPU.DI, CPU.DO, A1 ..."),
+                "tag": _str("позиция на схеме без минуса: CPU, A1"),
+                "type": _str("тип модуля: AM5210808TN, GL20-1600END"),
+                "kind": {"type": "string", "enum": ["in", "out"]},
+                "ref": _str("ссылка на лист, где модуль целиком, напр. /5.0"),
+                "feed": _str("входы: откуда питание контактов, напр. -KBF1:24 / 7.3"),
+                "feed_wire": WIRE,
+                "feed_next": _str("входы: куда питание уходит дальше"),
+                "common": _str("выходы: общий провод катушек, напр. -XM1:M5/4.8"),
+                "common_wire": WIRE,
+                "npn": {"type": "boolean", "description": "выходы коммутируют минус"},
                 "channels": {"type": "array", "items": {"type": "object", "properties": {
-                    "pin": {"type": "string"}, "desc": {"type": "string"},
-                    "wire": {"type": "array", "items": {"type": "string"}},
+                    "pin": _str("вывод модуля: A1…A8, B1…B8; COM входов — A9 (и B9), "
+                                "COM OUT / +24V выходов — B9 / A9"),
+                    "desc": _str("назначение, строки через \\n"),
+                    "wire": WIRE,
                     "element": {"type": "string", "enum": [
                         "", "ттр", "перекл", "кнопка но", "кнопка нз", "катушка", "лампа",
                         "общий", "питание"]},
-                    "device": {"type": "string"}, "link": {"type": "string"},
-                    "ref": {"type": "string"}, "param": {"type": "string"}}}}}}},
+                    "device": _str("обозначение реле/кнопки/лампы: -1K1, -S1"),
+                    "link": _str("откуда/куда провод: -1XT1:1, -U1:DC OK, -XM1:M3"),
+                    "ref": _str("ссылка вручную: лист.столбец (12.1) или /16.3"),
+                    "param": _str("надпись у катушки/лампы: =24V")}}}}}},
         },
         "required": ["summary"],
     },

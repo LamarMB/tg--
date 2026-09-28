@@ -21,10 +21,17 @@ def doc_to_dict(doc: Document) -> dict:
     }
 
 
+def _wire_obj(w: list[str]) -> dict:
+    w = (list(w) + ["", "", ""])[:3]
+    return {"mark": w[0], "color": w[1], "section": w[2]}
+
+
 def _mod_to_dict(m: PlcModule) -> dict:
     d = asdict(m)
+    d["feed_wire"], d["common_wire"] = _wire_obj(m.feed_wire), _wire_obj(m.common_wire)
     for c in d["channels"]:
         c.pop("module", None)
+        c["wire"] = _wire_obj(c["wire"])
     return d
 
 
@@ -32,7 +39,15 @@ def _s(v) -> str:
     return "" if v is None else str(v).strip()
 
 
+def _dash(s) -> str:
+    """Ссылка на устройство — с минусом впереди (-1XT1:1), если не задано иначе."""
+    s = _s(s)
+    return "-" + s if s and s[0].isalnum() else s
+
+
 def _wire(v) -> list[str]:
+    if isinstance(v, dict):
+        v = [v.get("mark"), v.get("color"), v.get("section")]
     v = list(v or [])[:3]
     return [_s(x) for x in v] + [""] * (3 - len(v))
 
@@ -72,8 +87,9 @@ def dict_to_doc(d: dict) -> Document:
         kind = "in" if kind.startswith(("in", "вх")) else "out"
         tag = _s(m.get("tag")).lstrip("-")
         mod = PlcModule(tag, _s(m.get("type")), kind, _s(m.get("ref")),
-                        _s(m.get("feed")), _wire(m.get("feed_wire")), _s(m.get("feed_next")),
-                        _s(m.get("common")), _wire(m.get("common_wire")),
+                        _dash(m.get("feed")), _wire(m.get("feed_wire")),
+                        _dash(m.get("feed_next")),
+                        _dash(m.get("common")), _wire(m.get("common_wire")),
                         bool(m.get("npn")), [], _s(m.get("key")) or tag)
         for c in m.get("channels") or []:
             el = _s(c.get("element")).lower()
@@ -83,7 +99,7 @@ def dict_to_doc(d: dict) -> Document:
             if dev and not dev.startswith("-"):
                 dev = "-" + dev
             mod.channels.append(PlcChannel(mod.key, _s(c.get("pin")), _s(c.get("desc")),
-                                           _wire(c.get("wire")), el, dev, _s(c.get("link")),
+                                           _wire(c.get("wire")), el, dev, _dash(c.get("link")),
                                            _s(c.get("ref")), _s(c.get("param"))))
         if mod.tag and mod.channels:
             plc.append(mod)

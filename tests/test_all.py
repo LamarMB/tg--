@@ -176,6 +176,26 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(len(state["spec"]), 2)
         self.assertEqual(len(state["plc"]), 1)
 
+    def test_key_command(self):
+        import os
+        b = bot.Bot(self.bot.api, claude_url=self.bot.claude_url,
+                    state_dir=self.bot.state_dir)
+        FakeTelegram.claude_reply = {"summary": "ok"}
+        old_root = bot.ROOT
+        with tempfile.TemporaryDirectory() as t:
+            bot.ROOT = Path(t)
+            try:
+                b.handle(self.msg(text="/key sk-ant-test123"))
+                self.assertEqual(b.claude_key, "sk-ant-test123")
+                self.assertIn("ANTHROPIC_API_KEY=sk-ant-test123",
+                              (Path(t) / ".env").read_text(encoding="utf-8"))
+                # второй раз чужой пользователь ключ не поменяет
+                b.handle(self.msg(text="/key sk-ant-other"))
+                self.assertEqual(b.claude_key, "sk-ant-test123")
+            finally:
+                bot.ROOT = old_root
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+
     def test_not_allowed(self):
         b = bot.Bot(self.bot.api, allowed={1})
         b.handle(self.msg(text="/template"))
