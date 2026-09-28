@@ -23,6 +23,9 @@ class Project:
     location: str = ""             # +СС1
     spec_doc_suffix: str = "В4"
     spec_doc_name: str = "Спецификация"
+    e3_doc_suffix: str = "Э3"
+    e3_doc_name: str = "Схема электрическая принципиальная"
+    e3_first_io_sheet: str = "2"   # с какого номера листа начинаются листы ПЛК
     litera: str = ""
     mass: str = ""
     scale: str = ""
@@ -76,3 +79,4 @@ class Document:
     project: Project
     spec: list[SpecItem] = field(default_factory=list)
     terminals: list[TerminalBlock] = field(default_factory=list)
+    plc: list = field(default_factory=list)       # list[e3.model.PlcModule]

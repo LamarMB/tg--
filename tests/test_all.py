@@ -136,3 +136,28 @@ class BotFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Schematic(unittest.TestCase):
+    def test_plc_sheets_and_xrefs(self):
+        from schemgen.e3 import io_sheets
+        d = read_document(EXAMPLE)
+        self.assertEqual([m.key for m in d.plc], ["CPU.DI", "CPU.DO", "A1", "A2", "A3", "A4"])
+        pages = io_sheets.layout(d.plc)
+        self.assertEqual(len(pages), 6)          # как листы 6–11 образца
+        xr = io_sheets.register(pages, first_sheet=6)
+        # кнопка -S1 на листе A2 ссылается на лампу -S1 листа выходов CPU (лист 7)
+        self.assertTrue(xr.head_ref("-S1").startswith("/7."))
+        # катушки 1K11 на листе 10, контактов на генерируемых листах нет
+        self.assertTrue(xr.head_ref("1K11").startswith("/10."))
+
+    def test_bad_element(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "t.xlsx"
+            write_workbook(p, read_document(EXAMPLE))
+            wb = load_workbook(p)
+            wb["Каналы ПЛК"]["G2"] = "Трансформатор"
+            wb.save(p)
+            with self.assertRaises(TemplateError) as e:
+                read_document(p)
+            self.assertIn("неизвестный элемент", e.exception.problems[0])

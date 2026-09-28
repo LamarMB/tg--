@@ -31,8 +31,8 @@ EXAMPLE = ROOT / "examples" / "example_2196_SS1.xlsx"
 log = logging.getLogger("bot")
 
 HELP = (
-    "Я делаю комплект документации (титульный лист, спецификация элементов, "
-    "клеммный план) в PDF по Excel-файлу.\n\n"
+    "Я делаю комплект документации в PDF по Excel-файлу: спецификацию и клеммный "
+    "план (В4) и схему Э3 (листы входов/выходов ПЛК).\n\n"
     "1. /template — пустой шаблон Excel\n"
     "2. /example — заполненный пример (шкаф ВКС.АСПУ.2196.СС1)\n"
     "3. Заполните шаблон и пришлите его мне файлом (.xlsx) — в ответ придёт PDF.\n\n"
@@ -179,7 +179,7 @@ class Bot:
             self.api.send_document(
                 chat, out, out_name,
                 f"Готово: {sheets} листов, позиций спецификации: {len(document.spec)}, "
-                f"клеммников: {len(document.terminals)}.", mid)
+                f"клеммников: {len(document.terminals)}, модулей ПЛК: {len(document.plc)}.", mid)
 
     def run(self) -> None:
         offset = 0
