@@ -27,7 +27,7 @@ from pathlib import Path
 from schemgen import TemplateError, read_document, render_pdf, write_workbook
 
 ROOT = Path(__file__).resolve().parent
-EXAMPLE = ROOT / "examples" / "пример_2196_СС1.xlsx"
+EXAMPLE = ROOT / "examples" / "example_2196_SS1.xlsx"
 log = logging.getLogger("bot")
 
 HELP = (
@@ -140,7 +140,7 @@ class Bot:
                 self.api.send_document(chat, p, "шаблон.xlsx",
                                        "Пустой шаблон. Заполните и пришлите мне.")
         elif cmd == "/example":
-            self.api.send_document(chat, EXAMPLE, EXAMPLE.name,
+            self.api.send_document(chat, EXAMPLE, "пример_2196_СС1.xlsx",
                                    "Пример заполнения (по шкафу ВКС.АСПУ.2196.СС1).")
         elif "document" in msg:
             self.on_document(chat, mid, msg["document"])

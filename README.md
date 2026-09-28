@@ -33,7 +33,7 @@ cp .env.example .env   # вписать BOT_TOKEN
 ## Без бота
 
 ```bash
-python cli.py examples/пример_2196_СС1.xlsx          # -> examples/пример_2196_СС1.pdf
+python cli.py examples/example_2196_SS1.xlsx       # -> examples/example_2196_SS1.pdf
 python cli.py --template шаблон.xlsx                 # пустой шаблон
 ```
 

@@ -12,7 +12,7 @@ import bot
 from schemgen import TemplateError, read_document, render_pdf, write_workbook
 
 ROOT = Path(__file__).resolve().parent.parent
-EXAMPLE = ROOT / "examples" / "пример_2196_СС1.xlsx"
+EXAMPLE = ROOT / "examples" / "example_2196_SS1.xlsx"
 
 
 class Generate(unittest.TestCase):
