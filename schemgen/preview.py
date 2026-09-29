@@ -46,7 +46,8 @@ def changed_pages(old_doc, new_doc, scale: float = 1.4) -> list:
     Если у листа есть «пара» в старой версии (тот же номер) — изменённые места
     обводятся красным."""
     new = _pages(new_doc, scale)
-    if old_doc is None or not (old_doc.spec or old_doc.terminals or old_doc.plc):
+    if old_doc is None or not (old_doc.spec or old_doc.terminals or old_doc.plc
+                               or old_doc.power24 or old_doc.feeders or old_doc.mains):
         return new
     old = _pages(old_doc, scale)
     old_keys = {_key(im) for im in old}

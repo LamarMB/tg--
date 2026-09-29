@@ -143,8 +143,10 @@ def painter(sh: _Sheet, xr: XRef):
     return draw
 
 
-def _breaker_symbol(p: Pen, x: float, y: float, tag: str, rating: str):
-    """y — низ толстого отвода от шины (верх контакта)."""
+def _breaker_symbol(p: Pen, x: float, y: float, tag: str, rating: str,
+                    pins=("2", "1"), dc: bool = True):
+    """y — низ толстого отвода от шины (верх контакта). pins — выводы сверху/снизу,
+    dc — подписи «+»/«-»."""
     p.vline(x, y, y + 5.0, S.LW)
     p.line(x, y + 5.0, x - 6.3, y + 17.5, S.LW)                   # подвижный контакт
     # привод: стрелка расцепителя и «ступенька»
@@ -155,10 +157,11 @@ def _breaker_symbol(p: Pen, x: float, y: float, tag: str, rating: str):
                  ((x - 17.5, y + 16.0), (x - 12.5, y + 16.0)),
                  ((x - 12.5, y + 16.0), (x - 12.5, y + 13.0))):
         p.line(*a, *b, S.LW)
-    p.text(x + 2.4, y - 7.0, "+", 5.5)
-    p.text(x + 1.6, y + 1.2, "2", S.PIN)
-    p.text(x + 1.6, y + 26.0, "1", S.PIN)
-    p.text(x + 2.4, y + 32.0, "-", 5.5)
+    if dc:
+        p.text(x + 2.4, y - 7.0, "+", 5.5)
+        p.text(x + 2.4, y + 32.0, "-", 5.5)
+    p.text(x + 1.6, y + 1.2, pins[0], S.PIN)
+    p.text(x + 1.6, y + 26.0, pins[1], S.PIN)
     p.text(x - 9.4, y + 29.3, tag, S.TAG, "right")
     if rating:
         p.text(x - 9.4, y + 39.6, rating, S.PIN, "right")

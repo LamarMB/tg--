@@ -20,7 +20,88 @@ def doc_to_dict(doc: Document) -> dict:
         "plc": [_mod_to_dict(m) for m in doc.plc],
         "power24": _p24_to_dict(doc.power24),
         "feeders": [asdict(f) for f in doc.feeders or []],
+        "mains": _mains_to_dict(doc.mains),
     }
+
+
+def _mains_to_dict(m) -> dict | None:
+    """Ввод 230 В. Устройства — одним списком (и питаемые от ветви: ветвь находит своё
+    устройство по load_tag)."""
+    if not m:
+        return None
+
+    def dev(d):
+        return {"tag": d.tag, "title": d.title, "param": d.param,
+                "pins": [{"name": p.name, "top": p.top, "link": p.link, "ref": p.ref,
+                          "wire": _wire_obj(p.wire)} for p in d.pins]}
+    devs = [dev(b.device) for b in m.branches if b.device] + [dev(d) for d in m.devices]
+    return {
+        "input_block": m.input_block, "input_labels": list(m.input_labels),
+        "input_from": m.input_from, "input_cable": m.input_cable,
+        "input_cable_type": m.input_cable_type,
+        "qs": m.qs, "qs_rating": m.qs_rating, "qs_poles": m.qs_poles,
+        "qs_outputs": [{"pole": o.pole, "link": o.link, "ref": o.ref,
+                        "wire": _wire_obj(o.wire)} for o in m.qs_outputs],
+        "n_bus": m.n_bus,
+        "n_taps": [{"clamp": t.clamp, "link": t.link, "ref": t.ref, "wire": _wire_obj(t.wire)}
+                   for t in m.n_taps],
+        "branches": [{"tag": b.tag, "rating": b.rating, "wire": _wire_obj(b.wire),
+                      "load": b.load,
+                      "load_tag": b.load_tag or (b.device.tag if b.device else ""),
+                      "load_param": b.load_param, "load_tag2": b.load_tag2,
+                      "load_param2": b.load_param2, "n_link": b.n_link, "link": b.link,
+                      "ref": b.ref} for b in m.branches],
+        "devices": devs,
+    }
+
+
+def _dict_to_mains(d):
+    from .e3.mains import Branch, Device, Mains, NTap, Pin, QsOutput
+    if not d:
+        return None
+    m = Mains()
+    m.input_block = _s(d.get("input_block")).lstrip("-") or m.input_block
+    labels = [_s(x) for x in d.get("input_labels") or [] if _s(x)]
+    if labels:
+        m.input_labels = labels
+    m.input_from = _s(d.get("input_from"))
+    m.input_cable = _s(d.get("input_cable")).lstrip("-")
+    m.input_cable_type = _s(d.get("input_cable_type"))
+    m.qs = _s(d.get("qs")).lstrip("-") or m.qs
+    m.qs_rating = _s(d.get("qs_rating"))
+    try:
+        m.qs_poles = max(1, min(6, int(d.get("qs_poles") or 4)))
+    except (TypeError, ValueError):
+        m.qs_poles = 4
+    def qlink(v):
+        v = _s(v)
+        return v if v.lower() in ("шина", "n", "bus") else _dash(v)
+    m.qs_outputs = [QsOutput(_s(o.get("pole")), qlink(o.get("link")), _s(o.get("ref")),
+                             _wire(o.get("wire"))) for o in d.get("qs_outputs") or []
+                    if _s(o.get("pole"))]
+    m.n_bus = _s(d.get("n_bus")).lstrip("-") or m.n_bus
+    m.n_taps = [NTap(_s(t.get("clamp")), _dash(t.get("link")), _s(t.get("ref")),
+                     _wire(t.get("wire"))) for t in d.get("n_taps") or [] if _s(t.get("clamp"))]
+    devices = {}
+    for x in d.get("devices") or []:
+        tag = _dash(x.get("tag"))
+        if not tag:
+            continue
+        devices[tag.upper()] = Device(tag, _s(x.get("title")), _s(x.get("param")), [
+            Pin(_s(p.get("name")), p.get("top") is not False, _dash(p.get("link")),
+                _s(p.get("ref")), _wire(p.get("wire")))
+            for p in x.get("pins") or [] if _s(p.get("name"))])
+    for b in d.get("branches") or []:
+        load = _s(b.get("load")).lower() or "стрелка"
+        br = Branch(_dash(b.get("tag")), _s(b.get("rating")), _wire(b.get("wire")), load,
+                    _dash(b.get("load_tag")), _s(b.get("load_param")),
+                    _dash(b.get("load_tag2")), _s(b.get("load_param2")),
+                    _dash(b.get("n_link")), _dash(b.get("link")), _s(b.get("ref")))
+        if load.startswith("устр"):
+            br.device = devices.pop(br.load_tag.upper(), None)
+        m.branches.append(br)
+    m.devices = list(devices.values())
+    return m if m else None
 
 
 def _p24_to_dict(pw) -> dict | None:
@@ -153,7 +234,7 @@ def dict_to_doc(d: dict) -> Document:
         if mod.tag and mod.channels:
             plc.append(mod)
     return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
-                    _dict_to_feeders(d.get("feeders")))
+                    _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")))
 
 
 def _dict_to_feeders(items):

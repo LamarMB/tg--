@@ -195,6 +195,34 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(len(state["spec"]), 2)
         self.assertEqual(len(state["plc"]), 1)
 
+    def test_spec_partial_merge(self):
+        from schemgen.assistant import merge
+        cur = {"spec": [{"designation": "QS1", "name": "Выключатель 40A"},
+                        {"designation": "SF1;SF3", "name": "Автомат 6A", "qty": "2"},
+                        {"designation": "U1", "name": "БП"}]}
+        out = merge(cur, {"spec": [
+            {"n": 2, "designation": "SF3", "name": "Автомат 6A", "qty": "1"},
+            {"n": None, "designation": "SF1", "name": "Автомат 10A", "qty": "1"}],
+            "remove_spec_rows": [3]})
+        self.assertEqual([r["designation"] for r in out["spec"]], ["QS1", "SF3", "SF1"])
+        self.assertNotIn("n", out["spec"][1])
+
+    def test_mains_merge(self):
+        from schemgen.assistant import merge
+        from schemgen.excel_io import read_document
+        from schemgen.jsonio import dict_to_doc, doc_to_dict
+        cur = doc_to_dict(read_document(ROOT / "examples" / "example_2196_SS1.xlsx"))
+        out = merge(cur, {"mains": {"qs_rating": "63A", "branches": [
+            {"tag": "-SF1", "rating": "10A 'C'", "load": "розетка", "load_tag": "-XS1"}]},
+            "remove_mains_items": ["-GB1", "QS:4"]})
+        m = out["mains"]
+        self.assertEqual(m["qs_rating"], "63A")
+        self.assertEqual(m["branches"][0]["rating"], "10A 'C'")
+        self.assertEqual(len(m["branches"]), len(cur["mains"]["branches"]))
+        self.assertNotIn("-GB1", [d["tag"] for d in m["devices"]])
+        self.assertNotIn("4", [o["pole"] for o in m["qs_outputs"]])
+        self.assertTrue(dict_to_doc(out).mains.branches[2].device)     # БП U1 в ветви SF3
+
     def test_base_template(self):
         self.bot.handle(self.msg(text="/base"))
         state = self.bot.load_state(42)

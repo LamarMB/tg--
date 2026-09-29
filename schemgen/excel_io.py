@@ -42,6 +42,7 @@ PROJECT_FIELDS = [
     ("Первый лист ПЛК в схеме", "e3_first_io_sheet", False, "2"),
     ("Лист питания 24В в схеме", "e3_power24_sheet", False, ""),
     ("Лист линий 230В в схеме", "e3_feeders_sheet", False, ""),
+    ("Лист ввода 230В в схеме", "e3_mains_sheet", False, ""),
     ("Литера", "litera", False, ""),
     ("Масса", "mass", False, ""),
     ("Масштаб", "scale", False, ""),
@@ -189,16 +190,18 @@ def read_document(path: str | Path) -> Document:
                 tier=tier, bridge=rec["Группа перемычки"]))
 
     # Схема Э3: модули ПЛК и каналы
-    from .e3.excel import read_feeders, read_plc, read_power24
+    from .e3.excel import read_feeders, read_mains, read_plc, read_power24
     plc = read_plc(wb, _sheet, _table, problems)
+    mains = read_mains(wb, _sheet, _table, problems)
     p24 = read_power24(wb, _sheet, _table, problems)
     feeders = read_feeders(wb, _sheet, _table, problems)
 
-    if not spec and not blocks and not plc and not p24 and not feeders and not problems:
+    if not spec and not blocks and not plc and not p24 and not feeders and not mains \
+            and not problems:
         problems.append("В файле нет ни строк спецификации, ни клемм, ни каналов ПЛК.")
     if problems:
         raise TemplateError(problems)
-    return Document(project, spec, blocks, plc, p24, feeders)
+    return Document(project, spec, blocks, plc, p24, feeders, mains)
 
 
 # ---------------------------------------------------------------------- запись
@@ -251,10 +254,11 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
             ws4.append([blk.name, r.part_no, r.type_no, r.section, r.marking,
                         r.jumper, r.cover, r.label, tier, _num(r.bridge)])
 
-    from .e3.excel import write_feeders, write_plc, write_power24
+    from .e3.excel import write_feeders, write_mains, write_plc, write_power24
     write_plc(wb, doc.plc if doc else [], _header)
     write_power24(wb, doc.power24 if doc else None, _header)
     write_feeders(wb, doc.feeders if doc else [], _header)
+    write_mains(wb, doc.mains if doc else None, _header)
     _help_sheet(wb.create_sheet("Инструкция"))
     wb.save(path)
 
@@ -327,6 +331,19 @@ def _help_sheet(ws) -> None:
         "(-XN:N1), Клеммник (X1), Кабель (W1LR1), Марка кабеля, Жилы (3G2,5), Зона (+ZM), "
         "Розетки (1XS1;1XS2;1XS3) или Нагрузка L/N/PE (стрелки), Подпись. Марки проводов "
         "(QF1-1, QF1-N1, QF1-2, QF1-N2) ставятся сами.",
+        "",
+        "ВВОД 230 В (лист «Ввод 230В»): Тип строки —",
+        "   ввод — Обозначение клеммника (X0), Вывод — клеммы через пробел (L1 L2 L3 N PE), "
+        "Название — кабель (W1E-001), Номинал — марка кабеля, Связь — откуда (-ШР);",
+        "   выключатель — QS1, Номинал (40A), Вывод — число полюсов;",
+        "   выход — полюс QS (2, 4 …), Связь: «шина» (общая шина автоматов), «N» или точка "
+        "(-QF1:1); нейтраль — имя шины (XN); отвод n — клемма (N1), Связь (-QF1:N1);",
+        "   ветвь — автомат от шины (SF1, 6A 'C') и Нагрузка: розетка / лампа / термостат "
+        "(+ вентилятор в «Нагрузка 2») / светильник / устройство / стрелка (Связь); "
+        "Нейтраль — откуда N нагрузки (-XN:N2);",
+        "   устройство — блок с выводами (U1, UPS): Название, Номинал; строки «вывод» — "
+        "Обозначение устройства, Вывод (L, V+, 11), Сверху да/нет, провод, Связь. "
+        "Устройство с тем же обозначением, что нагрузка ветви, рисуется в ветви.",
         "   «Первый лист ПЛК в схеме» (лист «Проект»): если перед листами ПЛК в схеме "
         "должны идти другие листы (силовая часть и т.п.), укажите номер, с которого "
         "начинать — нумерация и ссылки будут с учётом этого.",

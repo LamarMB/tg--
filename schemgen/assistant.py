@@ -43,13 +43,16 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    project — только изменённые поля;
    power24 — только изменённые группы/шины минусов, каждая целиком;
    feeders — только изменённые/новые линии 230 В, каждая целиком;
-   spec — если меняется, весь список целиком (все позиции, включая неизменённые);
+   spec — только изменённые строки (с их номером n из текущей спецификации) и новые
+     строки (n = null); удалённые строки — номера в remove_spec_rows;
    terminals — только изменённые/новые клеммники, каждый целиком (все строки);
      удалённые клеммники перечисли в remove_terminal_blocks;
    plc — только изменённые/новые модули, каждый целиком (все каналы, как были, с
      правкой); удалённые модули перечисли в remove_plc_modules (по key).
    Неизменённое не присылай.
-4. Спецификация (spec): правка одного изделия из общей строки (напр. «1QFU6 на 6А» при
+4. Спецификация (spec) описывает ВСЕ изделия шкафа: если в сообщении добавлено,
+   удалено или изменено изделие любого листа (автомат, лампа, реле, БП, модуль …) —
+   отрази это в spec, даже когда запрос обрабатывает только spec. Правка одного изделия из общей строки (напр. «1QFU6 на 6А» при
    строке «1QFU6;2QFU3;2QFU6 … 4А, 3 шт») — убери его обозначение из общей строки и
    уменьши её количество, а для него заведи отдельную строку. Остальные изделия
    общей строки не меняются. Если изделие удалено из схемы — убери его и из спецификации.
@@ -94,6 +97,18 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    leak), источник фазы (source -QS1:8) и нейтрали (n_source -XN:N1), клеммник, кабель,
    далее розетки (sockets) или стрелки к нагрузке (load_links: L, N, PE), caption.
    Правка: присылай изменённую линию целиком; удалённые — в remove_feeders.
+6в. Ввод и питание 230 В (mains): клеммник ввода (input_block X0, input_labels), кабель
+   ввода, выключатель-разъединитель (qs QS1, qs_rating 40A, qs_poles), выходы QS
+   (qs_outputs: pole 2/4/6/8, link «шина» — общая шина автоматов ветвей, «N» — на шину
+   нейтрали, иначе точка -QF1:1), шина нейтрали (n_bus XN, n_taps: clamp N1, link),
+   ветви от шины (branches: автомат tag -SF1, rating 6A 'C', load — розетка / лампа /
+   термостат (+ вентилятор в load_tag2/load_param2) / светильник / устройство /
+   стрелка (link), load_tag, load_param, n_link — откуда N нагрузки, -XN:N2),
+   устройства с выводами (devices: tag -U1/-UPS/-GB1, title, param, pins: name, top,
+   link, wire). Устройство, питаемое от ветви (load «устройство»), имеет тот же tag,
+   что load_tag ветви. Правка: присылай только изменённые поля и элементы — ветвь,
+   устройство, выход QS, отвод N — каждый целиком; удалённые — в remove_mains_items
+   (обозначение автомата/устройства, «QS:4» для выхода, «N:N3» для отвода).
 7. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
    Не пиши о том, что не менялось, и не упоминай «разделы» и «запросы».
 """
@@ -133,6 +148,9 @@ TOOL = {
                                                         "Нач.отд.", "Н.контр.", "Утв."]},
                     "name": _str("фамилия"), "date": _str("дата, напр. 03.26")}}}}},
             "spec": {"type": "array", "items": {"type": "object", "properties": {
+                "n": {"type": ["integer", "null"],
+                      "description": "номер строки текущей спецификации, которую эта строка "
+                                     "заменяет; для новой строки — null"},
                 "designation": _str("позиционные обозначения: QF1;QF2 или 1K1...1K4"),
                 "name": _str("наименование изделия"),
                 "article": _str("артикул (только если назван пользователем)"),
@@ -187,6 +205,50 @@ TOOL = {
                                "description": "если не розетки: куда L, N, PE (стрелки)"},
                 "load_ref": _str("ссылка нагрузки"),
                 "caption": _str("подпись: «Питание лазера … (поток 1)»")}}},
+            "mains": {"type": "object", "description": "Лист «Ввод и питание 230 В»",
+                      "properties": {
+                "input_block": _str("клеммник ввода: X0"),
+                "input_labels": {"type": "array", "items": {"type": "string"},
+                                 "description": "клеммы ввода: L1, L2, L3, N, PE"},
+                "input_from": _str("откуда ввод: -ШР"),
+                "input_cable": _str("кабель ввода: W1E-001"),
+                "input_cable_type": _str("марка кабеля: FLEXICORE 130H-нг(A)-HF 5G2,5"),
+                "qs": _str("выключатель-разъединитель: QS1"), "qs_rating": _str("40A"),
+                "qs_poles": {"type": "integer", "description": "число полюсов QS"},
+                "qs_outputs": {"type": "array", "items": {"type": "object", "properties": {
+                    "pole": _str("вывод QS: 2, 4, 6, 8"),
+                    "link": _str("«шина», «N» или точка: -QF1:1"),
+                    "ref": _str("ссылка вручную"), "wire": WIRE}}},
+                "n_bus": _str("шина нейтрали: XN"),
+                "n_taps": {"type": "array", "items": {"type": "object", "properties": {
+                    "clamp": _str("N1"), "link": _str("-QF1:N1"), "ref": _str("ссылка вручную"),
+                    "wire": WIRE}}},
+                "branches": {"type": "array", "items": {"type": "object", "properties": {
+                    "tag": _str("автомат: -SF1 (пусто — без автомата)"),
+                    "rating": _str("номинал АВТОМАТА ветви: 6A 'C' («SF1 на 10А» — сюда)"),
+                    "wire": WIRE,
+                    "load": {"type": "string", "enum": ["розетка", "лампа", "термостат",
+                                                        "светильник", "устройство", "стрелка"]},
+                    "load_tag": _str("-XS1, -H1, -TR1, -EA1, -U1"),
+                    "load_param": _str("параметр НАГРУЗКИ (не автомата): номинал розетки "
+                                       "16 A, лампа AC230V Белая, -10..+80°C, 5 Вт"),
+                    "load_tag2": _str("вентилятор при термостате: -EC1"),
+                    "load_param2": _str("100м3/ч, 230VAC"),
+                    "n_link": _str("нейтраль нагрузки: -XN:N2"),
+                    "link": _str("для стрелки: куда, -QF3:1"), "ref": _str("ссылка вручную")}}},
+                "devices": {"type": "array", "items": {"type": "object", "properties": {
+                    "tag": _str("-U1, -UPS, -GB1"), "title": _str("надпись в блоке"),
+                    "param": _str("10 A"),
+                    "pins": {"type": "array", "items": {"type": "object", "properties": {
+                        "name": _str("вывод: L, N, V+, 11"),
+                        "top": {"type": "boolean", "description": "вывод сверху блока"},
+                        "link": _str("куда провод: -X0.3:1L+"), "ref": _str("ссылка вручную"),
+                        "wire": WIRE}}}}}}}},
+            "remove_mains_items": {"type": "array", "items": {"type": "string"},
+                                   "description": "что удалить с листа ввода: -SF2, -UPS, "
+                                                  "QS:4, N:N3"},
+            "remove_spec_rows": {"type": "array", "items": {"type": "integer"},
+                                 "description": "номера (n) строк спецификации, которые удалить"},
             "remove_feeders": {"type": "array", "items": {"type": "string"},
                                "description": "обозначения линий (автоматов), которые удалить"},
             "remove_power24_groups": {"type": "array", "items": {"type": "string"},
@@ -239,7 +301,7 @@ TOOL = {
     },
 }
 
-SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders")
+SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains")
 
 
 class AssistantError(Exception):
@@ -248,17 +310,21 @@ class AssistantError(Exception):
 
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
-GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders")]
+GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders"),
+          ("mains",)]
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
                "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
-               "feeders": "отходящие линии 230 В (QF, клеммы, кабели, розетки)"}
+               "feeders": "отходящие линии 230 В (QF, клеммы, кабели, розетки)",
+               "mains": "ввод и питание 230 В (X0, QS1, шина N, автоматы SF с нагрузками, "
+                        "БП, ИБП, батарея)"}
 
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
-    extra = {"terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
-             "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"]}
+    extra = {"spec": ["remove_spec_rows"], "terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
+             "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"],
+             "mains": ["remove_mains_items"]}
     keep = ["summary", "questions", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
@@ -283,6 +349,8 @@ def _unwrap(out: dict) -> dict:
 def _call(api_key, current, message, sections, model, url, timeout) -> dict:
     names = ", ".join(GROUP_NAMES[s] for s in sections)
     ctx = {k: current.get(k) for k in ("project", *sections) if current.get(k)}
+    if ctx.get("spec"):                       # номера строк — чтобы править поштучно
+        ctx["spec"] = [{"n": i, **row} for i, row in enumerate(ctx["spec"], 1)]
     user = ("Текущий проект (JSON, только нужные разделы):\n"
             + json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))
             + "\n\nСообщение пользователя:\n" + message
@@ -320,6 +388,8 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
         if block.get("type") == "tool_use" and block.get("name") == "save_project":
             out = _unwrap(block.get("input") or {})
             allowed = {"summary", "questions", *sections}
+            if "spec" in sections:
+                allowed.add("remove_spec_rows")
             if "terminals" in sections:
                 allowed.add("remove_terminal_blocks")
             if "plc" in sections:
@@ -328,6 +398,8 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
                 allowed.add("remove_power24_groups")
             if "feeders" in sections:
                 allowed.add("remove_feeders")
+            if "mains" in sections:
+                allowed.add("remove_mains_items")
             return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
@@ -342,6 +414,8 @@ def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
         parts = [f.result() for f in futs]      # первая ошибка пробрасывается
     result: dict = {"summary": "", "questions": []}
     for part in parts:
+        if not any(v for k, v in part.items() if k not in ("summary", "questions")):
+            continue                      # группе нечего менять — её рассуждения не нужны
         for k, v in part.items():
             if k == "summary":
                 if v and v.strip():
@@ -350,8 +424,23 @@ def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
                 result["questions"] += [q for q in v or [] if q and q not in result["questions"]]
             else:
                 result[k] = v
+    _guard_articles(result, current, message)
     result["questions"] = result["questions"][:8]
     return result
+
+
+def _guard_articles(result: dict, current: dict, message: str) -> None:
+    """Артикул, которого нет ни в текущей спецификации, ни в сообщении, модель
+    придумала «по аналогии» — убираем и спрашиваем."""
+    known = {str(r.get("article") or "").strip().upper() for r in current.get("spec") or []}
+    text = message.upper()
+    for r in result.get("spec") or []:
+        a = str(r.get("article") or "").strip()
+        if a and a.upper() not in known and a.upper() not in text:
+            r["article"] = ""
+            q = f"Артикул для {r.get('designation') or r.get('name', '')[:40]} — назовите " \
+                f"(«{a}» не подставил: его нет в проекте и в сообщении)."
+            result["questions"].insert(0, q)
 
 
 def _mkey(m: dict) -> str:
@@ -366,8 +455,9 @@ def merge(current: dict, update: dict) -> dict:
         pr = dict(out.get("project") or {})
         pr.update({k: v for k, v in update["project"].items() if v is not None})
         out["project"] = pr
-    if update.get("spec"):
-        out["spec"] = update["spec"]
+    if update.get("spec") or update.get("remove_spec_rows"):
+        out["spec"] = _merge_spec(list(out.get("spec") or []), update.get("spec") or [],
+                                  update.get("remove_spec_rows") or [])
     for sec, key, rm in (("terminals", lambda b: str(b.get("name", "")).strip().upper(),
                           "remove_terminal_blocks"),
                          ("plc", _mkey, "remove_plc_modules"),
@@ -407,4 +497,80 @@ def merge(current: dict, update: dict) -> dict:
                              if str(b.get("tag", "")).strip().lstrip("-").upper()
                              not in {x.lstrip("-") for x in rm}]
         out["power24"] = pw
+    mn = update.get("mains") or {}
+    rm = {str(x).strip().lstrip("-").upper() for x in update.get("remove_mains_items") or []}
+    if mn or rm:
+        out["mains"] = _merge_mains(dict(out.get("mains") or {}), mn, rm)
     return out
+
+
+def _merge_spec(cur: list, new: list, remove: list) -> list:
+    """Строки с номером n заменяют строку n текущей спецификации, без номера —
+    добавляются после последней строки с похожим обозначением (или в конец)."""
+    def num(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+    if not cur or (not remove and len(new) >= len(cur)
+                   and all(r.get("n") in (None, "") for r in new)):
+        # новый проект или модель прислала весь список заново
+        return [{k: v for k, v in r.items() if k != "n"} for r in new]
+    rows = [dict(r) for r in cur]
+    slots: list = [[r] for r in rows]          # на месте строки i — одна или несколько
+    rm = {num(x) for x in remove} - {None}
+    tail = []
+    for r in new:
+        r = dict(r)
+        n = num(r.pop("n", None))
+        if n is not None and 1 <= n <= len(rows):
+            if n in rm:
+                rm.discard(n)
+            if slots[n - 1] and slots[n - 1][0] is rows[n - 1]:
+                slots[n - 1][0] = r
+            else:
+                slots[n - 1].append(r)
+        else:
+            tail.append(r)
+    for n in rm:
+        if 1 <= n <= len(rows):
+            slots[n - 1] = [x for x in slots[n - 1] if x is not rows[n - 1]]
+    out = [r for sl in slots for r in sl]
+    for r in tail:                             # новую строку ставим рядом с «родственной»
+        pref = str(r.get("designation", "")).split(";")[0].rstrip("0123456789.").upper()
+        idx = max((i for i, x in enumerate(out) if pref and str(x.get("designation", ""))
+                   .upper().startswith(pref)), default=None)
+        if idx is None:
+            out.append(r)
+        else:
+            out.insert(idx + 1, r)
+    return out
+
+
+def _u(v) -> str:
+    return str(v or "").strip().lstrip("-").upper()
+
+
+def _merge_mains(cur: dict, new: dict, rm: set) -> dict:
+    """Ввод 230 В: простые поля — по одному, списки — поэлементно по ключу."""
+    lists = {"qs_outputs": lambda o: "QS:" + _u(o.get("pole")),
+             "n_taps": lambda t: "N:" + _u(t.get("clamp")),
+             "branches": lambda b: _u(b.get("tag")) or "LOAD:" + _u(b.get("load_tag")),
+             "devices": lambda d: _u(d.get("tag"))}
+    for k, v in new.items():
+        if k not in lists and v not in (None, "", []):
+            cur[k] = v
+    for part, key in lists.items():
+        items = [x for x in cur.get(part) or [] if key(x) not in rm]
+        for n in new.get(part) or []:
+            k = key(n)
+            idx = next((i for i, x in enumerate(items) if key(x) == k), None)
+            if idx is None:
+                items.append(n)
+            else:
+                items[idx] = n
+        cur[part] = items
+    # ветвь без автомата, удалённая по обозначению нагрузки
+    cur["branches"] = [b for b in cur.get("branches") or [] if _u(b.get("load_tag")) not in rm
+                       or _u(b.get("tag"))]
+    return cur

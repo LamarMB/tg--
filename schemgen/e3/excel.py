@@ -238,3 +238,132 @@ def write_feeders(wb, feeders, header) -> None:
                    f.source, f.source_ref, f.n_source, f.n_ref, f.terminal, f.cable,
                    f.cable_type, f.cable_cores, f.zone, ";".join(f.sockets), f.socket_rating,
                    *loads, f.load_ref, f.caption])
+
+
+# ------------------------------------------------------------ Ввод 230 В
+M_COLS = ["Тип", "Обозначение", "Номинал", "Название", "Вывод", "Сверху",
+          "Нагрузка", "Нагрузка обозн.", "Нагрузка парам.", "Нагрузка 2 обозн.",
+          "Нагрузка 2 парам.", "Марка провода", "Цвет", "Сечение", "Связь", "Ссылка",
+          "Нейтраль"]
+M_TYPES = ("ввод", "выключатель", "выход", "нейтраль", "отвод n", "ветвь", "устройство",
+           "вывод")
+
+
+def _t(s: str) -> str:
+    s = (s or "").strip()
+    return s if not s or s.startswith(("-", "+")) else "-" + s
+
+
+def read_mains(wb, find_sheet, table, problems):
+    from .mains import Branch, Device, Mains, NTap, Pin, QsOutput
+    ws = find_sheet(wb, "Ввод 230В", False, problems) or \
+        find_sheet(wb, "Ввод 230 В", False, problems)
+    if ws is None:
+        return None
+    m = Mains()
+    devices: dict[str, Device] = {}
+    last_dev = None
+    for rec in table(ws, M_COLS, problems):
+        kind = rec["Тип"].strip().lower()
+        wire = [rec["Марка провода"], rec["Цвет"], rec["Сечение"]]
+        if kind == "ввод":
+            m.input_block = rec["Обозначение"].lstrip("-") or m.input_block
+            if rec["Вывод"]:
+                m.input_labels = rec["Вывод"].replace(",", " ").replace(";", " ").split()
+            m.input_from = rec["Связь"]
+            m.input_cable = rec["Название"]
+            m.input_cable_type = rec["Номинал"]
+        elif kind == "выключатель":
+            m.qs = rec["Обозначение"].lstrip("-") or m.qs
+            m.qs_rating = rec["Номинал"]
+            if rec["Вывод"].isdigit():
+                m.qs_poles = max(1, min(6, int(rec["Вывод"])))
+        elif kind == "выход":
+            m.qs_outputs.append(QsOutput(rec["Вывод"], rec["Связь"], rec["Ссылка"], wire))
+        elif kind == "нейтраль":
+            m.n_bus = rec["Обозначение"].lstrip("-") or m.n_bus
+        elif kind == "отвод n":
+            m.n_taps.append(NTap(rec["Вывод"], rec["Связь"], rec["Ссылка"], wire))
+        elif kind == "ветвь":
+            m.branches.append(Branch(
+                _t(rec["Обозначение"]), rec["Номинал"], wire,
+                rec["Нагрузка"].strip().lower() or "стрелка", _t(rec["Нагрузка обозн."]),
+                rec["Нагрузка парам."], _t(rec["Нагрузка 2 обозн."]), rec["Нагрузка 2 парам."],
+                rec["Нейтраль"], rec["Связь"], rec["Ссылка"]))
+        elif kind == "устройство":
+            tag = _t(rec["Обозначение"])
+            last_dev = devices[tag.upper()] = Device(tag, rec["Название"], rec["Номинал"])
+        elif kind == "вывод":
+            tag = _t(rec["Обозначение"])
+            dev = devices.get(tag.upper()) if tag else last_dev
+            if dev is None:
+                problems.append(f"Лист «Ввод 230В»: вывод {rec['Вывод']} — устройство "
+                                f"«{tag}» не описано выше строкой «устройство».")
+                continue
+            top = rec["Сверху"].strip().lower() not in ("нет", "низ", "снизу", "0", "false")
+            dev.pins.append(Pin(rec["Вывод"], top, rec["Связь"], rec["Ссылка"], wire))
+        else:
+            problems.append(f"Лист «Ввод 230В»: тип «{rec['Тип']}» — нужно: "
+                            + ", ".join(M_TYPES) + ".")
+    # устройство, которое питается от ветви, рисуется в ней
+    for b in m.branches:
+        if b.load.startswith("устр"):
+            b.device = devices.pop(b.load_tag.upper(), None)
+    m.devices = list(devices.values())
+    return m if m else None
+
+
+def write_mains(wb, m, header) -> None:
+    ws = wb.create_sheet("Ввод 230В")
+    header(ws, M_COLS, [11, 12, 22, 24, 8, 7, 11, 11, 14, 11, 16, 11, 7, 7, 14, 8, 10])
+    from openpyxl.worksheet.datavalidation import DataValidation
+    dv = DataValidation(type="list", allow_blank=True, formula1='"' + ",".join(M_TYPES) + '"')
+    ws.add_data_validation(dv)
+    dv.add("A2:A1000")
+    dv2 = DataValidation(type="list", allow_blank=True,
+                         formula1='"розетка,лампа,термостат,светильник,устройство,стрелка"')
+    ws.add_data_validation(dv2)
+    dv2.add("G2:G1000")
+    if not m:
+        return
+    E = [""] * len(M_COLS)
+
+    def row(**kv):
+        r = list(E)
+        for k, v in kv.items():
+            r[M_COLS.index(k)] = v
+        ws.append(r)
+
+    def w3(w):
+        w = (list(w or []) + ["", "", ""])[:3]
+        return {"Марка провода": w[0], "Цвет": w[1], "Сечение": w[2]}
+
+    def dev(d):
+        row(**{"Тип": "устройство", "Обозначение": d.tag, "Номинал": d.param,
+               "Название": d.title})
+        for pn in d.pins:
+            row(**{"Тип": "вывод", "Обозначение": d.tag, "Вывод": pn.name,
+                   "Сверху": "да" if pn.top else "нет", "Связь": pn.link, "Ссылка": pn.ref,
+                   **w3(pn.wire)})
+
+    row(**{"Тип": "ввод", "Обозначение": m.input_block, "Вывод": " ".join(m.input_labels),
+           "Связь": m.input_from, "Название": m.input_cable, "Номинал": m.input_cable_type})
+    row(**{"Тип": "выключатель", "Обозначение": m.qs, "Номинал": m.qs_rating,
+           "Вывод": str(m.qs_poles)})
+    for o in m.qs_outputs:
+        row(**{"Тип": "выход", "Вывод": o.pole, "Связь": o.link, "Ссылка": o.ref,
+               **w3(o.wire)})
+    row(**{"Тип": "нейтраль", "Обозначение": m.n_bus})
+    for t in m.n_taps:
+        row(**{"Тип": "отвод n", "Вывод": t.clamp, "Связь": t.link, "Ссылка": t.ref,
+               **w3(t.wire)})
+    for b in m.branches:
+        row(**{"Тип": "ветвь", "Обозначение": b.tag, "Номинал": b.rating, "Нагрузка": b.load,
+               "Нагрузка обозн.": b.load_tag or (b.device.tag if b.device else ""),
+               "Нагрузка парам.": b.load_param, "Нагрузка 2 обозн.": b.load_tag2,
+               "Нагрузка 2 парам.": b.load_param2, "Нейтраль": b.n_link,
+               "Связь": b.link, "Ссылка": b.ref, **w3(b.wire)})
+        if b.device:
+            dev(b.device)
+    for d in m.devices:
+        dev(d)

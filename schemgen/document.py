@@ -1,7 +1,7 @@
 """Сборка PDF из модели."""
 from __future__ import annotations
 
-from .e3 import io_sheets, power24, power230
+from .e3 import io_sheets, mains, power24, power230
 from .frame import draw_frame
 from .model import Document
 from .pen import Pen
@@ -42,7 +42,7 @@ def render_pdf(doc: Document, path: str) -> int:
     # Документ Э3: титул + силовые листы + питание 24 В + листы ПЛК.
     # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
     # чтобы ссылки между листами разных типов подставлялись сами.
-    if doc.plc or doc.power24 or doc.feeders:
+    if doc.plc or doc.power24 or doc.feeders or doc.mains:
         xr = io_sheets.XRef()
         numbers, pages = [1], [title_page(pr)]
         nxt = 2
@@ -52,6 +52,11 @@ def render_pdf(doc: Document, path: str) -> int:
             return max(int(v), nxt) if v.isdigit() else nxt
 
         plan = []                                     # (номер, painter)
+        m_sheets = mains.layout(doc.mains) if doc.mains else []
+        if m_sheets:
+            nums = mains.register(m_sheets, start(pr.e3_mains_sheet), xr)
+            plan += [(n, mains.painter(sh, xr)) for n, sh in zip(nums, m_sheets)]
+            nxt = nums[-1] + 1
         f_sheets = power230.layout(doc.feeders) if doc.feeders else []
         if f_sheets:
             nums = power230.register(f_sheets, start(pr.e3_feeders_sheet), xr)
