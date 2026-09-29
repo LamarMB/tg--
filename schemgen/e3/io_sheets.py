@@ -237,6 +237,7 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
         S.pin_bottom(p, x, top)
         p.text(x, top + 36.1, ch.pin, S.PIN, "center")
         step = 56.7 if pos in b.regular else 34.0
+        p.anchor(f"{m.tag}:{ch.pin}", x - step / 2 + 3, top + 28.0, x + step / 2 - 3, top + 80.0)
         S.centered_lines(p, x, top + 45.3, ch.desc, step - 4)
         wired = bool(_wire_lines(ch) or ch.element or ch.link)
         if not wired:
@@ -330,6 +331,8 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
         S.pin_top(p, x, bottom)
         p.text(x, bottom - 29.7, ch.pin, S.PIN, "center")
         S.centered_lines(p, x, top + 68.2, ch.desc, 86.0 if pos in b.regular else 60.0)
+        hw = (86.0 if pos in b.regular else 60.0) / 2
+        p.anchor(f"{m.tag}:{ch.pin}", x - hw + 2, top + 60.0, x + hw - 2, bottom - 24.0)
         el = ch.element
         wired = bool(_wire_lines(ch) or el or ch.link)
         if not wired:

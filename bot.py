@@ -35,21 +35,17 @@ STATE_DIR = ROOT / "data"          # текущий проект каждого 
 log = logging.getLogger("bot")
 
 HELP = (
-    "Я делаю комплект документации в PDF: спецификацию и клеммный план (В4) и схему "
-    "Э3 (листы входов/выходов ПЛК).\n\n"
-    "Два способа:\n"
-    "• Текстом. Опишите, что в проекте: шифр, заказчик, модули ПЛК и что на каких "
-    "входах/выходах, реле, клеммники, спецификация. Можно по частям и потом "
-    "поправлять: «добавь реле 1K5 на выход B5», «убери клеммник X3».\n"
-    "• Excel. /template — пустой шаблон, /example — заполненный пример. "
-    "Заполните и пришлите файлом.\n\n"
-    "В ответ — PDF и Excel с тем, что я понял (его можно поправить и прислать обратно).\n"
-    "Каждую правку текстом я сначала показываю картинкой изменённых листов — "
-    "применяю после кнопки «Принять».\n"
-    "/base — новый проект из базового шаблона (дальше правите входы/выходы текстом), "
-    "/savebase — сделать текущий проект базовым.\n"
-    "/project — текущий проект в Excel, /new — начать новый пустой проект, "
-    "/key sk-ant-… — задать ключ Claude API."
+    "Я рисую электрическую схему шкафа (Э3) со спецификацией и клеммным планом (В4) в PDF.\n\n"
+    "Напишите списком, что будет в шкафу: ПЛК и модули, датчики и сигналы, кнопки, "
+    "лампы, колонна, питание 24 В и 230 В, розетки … Можно коротко — недостающее "
+    "(выводы, клеммы, автоматы, провода) я дострою сам.\n\n"
+    "В ответ пришлю ЧЕРНОВИК PDF: оранжевым с номером — мои допущения и вопросы, "
+    "синим — что изменилось. Отвечайте текстом, можно по номерам («1 да, 3 — на "
+    "B5»), — пришлю новый черновик. ✅ Принять — чистый PDF и Excel, ↩️ Отменить — "
+    "откатить черновик.\n\n"
+    "Ещё: /new — новый пустой проект, /base — проект из базового шаблона, "
+    "/savebase — сделать текущий базовым, /project — текущий проект в Excel, "
+    "/template и /example — Excel-шаблон и пример, /key sk-ant-… — ключ Claude API."
 )
 
 
@@ -278,7 +274,7 @@ class Bot:
                       f"{len(d.spec)} поз. спецификации, {len(d.terminals)} клеммников, "
                       f"{len(d.plc)} модулей ПЛК.\nТеперь пишите, что поменять: «шифр "
                       "ВКС.АСПУ.2300.СС1», «вход A5 модуля A1 — датчик уровня», «убери "
-                      "выход B3 модуля A4» … Каждую правку покажу картинкой перед применением.")
+                      "выход B3 модуля A4» … Каждую правку пришлю черновиком PDF с метками.")
         elif cmd == "/savebase":
             state = self.load_state(chat)
             if not state:
@@ -362,61 +358,119 @@ class Bot:
                                         "Claude API командой: /key sk-ant-...\n"
                                         "Пока можно работать через Excel (/template).", mid)
             return
-        self.api.send_message(chat, "Разбираю описание, это займёт до пары минут…", mid)
+        pending = self.load_pending(chat)
+        saved = self.load_state(chat)
+        current = {k: v for k, v in (pending or saved).items() if k != "_open"}
+        open_items = (pending or {}).get("_open") or []
+        self.api.send_message(chat, "Принял, рисую черновик — это займёт 1–3 минуты…", mid)
         self.api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
-        current = self.load_pending(chat) or self.load_state(chat)
         try:
             update = assistant.ask(self.claude_key, current, text, self.claude_model,
-                                   self.claude_url)
+                                   self.claude_url, open_items=open_items)
         except assistant.AssistantError as e:
             self.api.send_message(chat, str(e), mid)
             return
         merged = assistant.merge(current, update)
         document = dict_to_doc(merged)
-        lines = [update.get("summary", "").strip()]
-        problems = check(document)
-        questions = [q for q in update.get("questions") or [] if q]
-        if questions:
-            lines.append("Уточните:\n" + "\n".join(f"• {q}" for q in questions[:8]))
-        if problems:
-            lines.append("Не хватает для PDF:\n" + "\n".join(f"• {p}" for p in problems[:10]))
-        if not (document.spec or document.terminals or document.plc):
+        # открытые пункты: старые без закрытых + новые допущения и вопросы
+        closed = set(update.get("resolved") or [])
+        items = [o for o in open_items if o.get("n") not in closed]
+        items += [{"key": str(c.get("key") or "").strip(), "text": str(c["text"]).strip(),
+                   "kind": "confirm"} for c in update.get("confirm") or []]
+        items += [{"key": "", "text": q, "kind": "question"}
+                  for q in update.get("questions") or [] if q]
+        seen, uniq = set(), []
+        for o in items:
+            sig = (o["key"].upper(), o["text"].lower())
+            if sig not in seen:
+                seen.add(sig)
+                uniq.append(o)
+        uniq.sort(key=lambda o: o["kind"] != "confirm")   # сначала допущения, потом вопросы
+        for i, o in enumerate(uniq, 1):
+            o["n"] = i
+        if not any((document.spec, document.terminals, document.plc, document.power24,
+                    document.feeders, document.mains)):
             self.save_state(chat, doc_to_dict(document))   # только реквизиты — сразу
-            lines.append("Пока нечего рисовать — опишите оборудование подробнее.")
+            lines = [update.get("summary", "").strip(), "Пока нечего рисовать — "
+                     "напишите списком, что будет в шкафу."]
+            if uniq:
+                lines.append("\n".join(f"{o['n']}. {o['text']}" for o in uniq))
             self.api.send_message(chat, "\n\n".join(x for x in lines if x), mid)
             return
         if not document.project.code:
             document.project.code = "БЕЗ ШИФРА"
-        self.propose(chat, mid, dict_to_doc(current) if current else None, document,
-                     "\n\n".join(x for x in lines if x))
+        # синим — отличия от прошлого черновика (или от принятого проекта)
+        self.propose(chat, mid, current, document, uniq, update.get("summary", "").strip(),
+                     closed_count=len(closed & {o.get("n") for o in open_items}))
 
-    # --- проверка правок картинками -----------------------------------------
+    # --- черновик на согласование ---------------------------------------------
     KEYBOARD = [[{"text": "✅ Принять", "callback_data": "ok"},
                  {"text": "↩️ Отменить", "callback_data": "undo"}]]
 
-    def propose(self, chat: int, mid: int, old_doc, new_doc, text: str) -> None:
-        """Показать изменённые листы картинками и ждать «Принять»/«Отменить»."""
-        self.save_pending(chat, doc_to_dict(new_doc))
+    def propose(self, chat: int, mid: int, saved: dict, document, items: list,
+                summary: str, closed_count: int = 0) -> None:
+        """Черновик PDF с метками (оранжевые — на подтверждение, синие — изменения)
+        и список пунктов; ждём ответ текстом или кнопку."""
+        data = doc_to_dict(document)
+        data["_open"] = items
+        self.save_pending(chat, data)
+        marks = [(o["key"], "confirm", o["n"]) for o in items if o.get("key")]
         try:
-            pages = preview.changed_pages(old_doc, new_doc)
+            marks += [(k, "changed", "") for k in preview.changed_keys(saved, data)]
         except Exception:
-            log.error("Не удалось нарисовать превью:\n%s", traceback.format_exc())
-            pages = []
-        if pages:
-            if len(pages) <= preview.MAX_FULL:
-                imgs = [preview.to_jpeg(p) for p in pages]
-                note = f"Изменилось листов: {len(pages)}."
-            else:
-                imgs = [preview.to_jpeg(preview.contact_sheet(pages[i:i + 9]))
-                        for i in range(0, min(len(pages), 36), 9)]
-                note = (f"Изменилось листов: {len(pages)} — показываю обзором; "
-                        "подробно смотрите PDF после «Принять».")
-            self.api.send_photos(chat, imgs, note)
-        else:
-            text += "\n\nНа листах ничего не поменялось (изменились только данные)."
-        self.api.send_message(chat, (text + "\n\nПроверьте и подтвердите. Можно сразу "
-                                     "написать следующую правку — она ляжет поверх этой.")
-                              .strip(), mid, keyboard=self.KEYBOARD)
+            log.error("Не удалось сравнить версии:\n%s", traceback.format_exc())
+        hits: list = []
+        pages_of: dict[str, set] = {}
+        changed_pages: set = set()
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "draft.pdf"
+            try:
+                sheets = render_pdf(document, str(out), marks, hits)
+            except Exception:
+                log.error("Черновик не нарисовался:\n%s", traceback.format_exc())
+                self.api.send_message(chat, "Не смог нарисовать черновик — ошибка в "
+                                            "программе, данные сохранил. Попробуйте "
+                                            "переформулировать.", mid)
+                return
+            for page, kind, label in hits:
+                if kind == "confirm":
+                    pages_of.setdefault(label, set()).add(page)
+                else:
+                    changed_pages.add(page)
+            cap = f"ЧЕРНОВИК, {sheets} листов."
+            if changed_pages:
+                cap += " Изменения (синие рамки) на стр. " + \
+                    ", ".join(map(str, sorted(changed_pages))) + "."
+            self.api.send_document(chat, out, self._name(document, "_черновик.pdf"),
+                                   cap[:1000], mid)
+        lines = []
+        if summary:
+            lines.append(summary)
+        elif not closed_count:
+            lines.append("Изменений нет.")
+        if closed_count:
+            lines.append(f"Закрыл пунктов: {closed_count}.")
+        conf = [o for o in items if o["kind"] == "confirm"]
+        ques = [o for o in items if o["kind"] != "confirm"]
+
+        def row(o):
+            pg = pages_of.get(str(o["n"]))
+            where = f" (стр. {', '.join(map(str, sorted(pg)))})" if pg else ""
+            return f"{o['n']}. {o['text']}{where}"
+        if conf:
+            lines.append("Подтвердите (оранжевые метки в PDF):\n" + "\n".join(map(row, conf)))
+        if ques:
+            lines.append("Вопросы:\n" + "\n".join(map(row, ques)))
+        problems = check(document)
+        if problems:
+            lines.append("Не хватает:\n" + "\n".join(f"• {p}" for p in problems[:8]))
+        lines.append("Ответьте текстом — можно по номерам («1 да, 2 — на B5») или "
+                     "любой правкой. ✅ — принять, ↩️ — отменить черновик."
+                     if items else "Если всё верно — ✅. Правки пишите текстом.")
+        text = "\n\n".join(lines)
+        if len(text) > 4000:
+            text = text[:3990] + "…"
+        self.api.send_message(chat, text, None, keyboard=self.KEYBOARD)
 
     def on_callback(self, cq: dict) -> None:
         chat = ((cq.get("message") or {}).get("chat") or {}).get("id")
@@ -438,12 +492,16 @@ class Bot:
             self.api.send_message(chat, "Нечего подтверждать — изменений на проверке нет.")
             return
         if cq.get("data") == "ok":
+            left = len(pending.pop("_open", None) or [])
             self.save_state(chat, pending)
             self.save_pending(chat, None)
-            self.deliver(chat, None, dict_to_doc(pending), "Изменения приняты.")
+            note = "Принято." + (f" Неотвеченных пунктов осталось {left} — они приняты "
+                                 "как в черновике." if left else "")
+            self.deliver(chat, None, dict_to_doc(pending), note)
         else:
             self.save_pending(chat, None)
-            self.api.send_message(chat, "Отменил. Проект остался как был.")
+            self.api.send_message(chat, "Черновик отменил, проект остался как был "
+                                        "до него.")
 
     def on_document(self, chat: int, mid: int, doc: dict) -> None:
         name = doc.get("file_name") or "file"

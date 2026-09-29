@@ -24,10 +24,13 @@ def _emit(pen: Pen, pr, code: str, name: str, pages, numbers=None,
     return len(pages)
 
 
-def render_pdf(doc: Document, path: str) -> int:
-    """Рисует комплект в PDF. Возвращает число листов."""
+def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
+    """Рисует комплект в PDF. Возвращает число листов.
+
+    marks — метки для черновика (см. Pen); hits — сюда складываются найденные
+    метки: (страница PDF, вид, номер)."""
     pr = doc.project
-    pen = Pen(path)
+    pen = Pen(path, marks)
     total = 0
 
     # Документ В4: титул + спецификация + клеммный план
@@ -80,4 +83,6 @@ def render_pdf(doc: Document, path: str) -> int:
     pen.c.setTitle(f"{pr.code} {pr.line}".strip())
     pen.c.setAuthor(pr.contractor)
     pen.save()
+    if hits is not None:
+        hits.extend(pen.hits)
     return total

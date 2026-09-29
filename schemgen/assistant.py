@@ -18,17 +18,41 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
 Пользователь описывает проект шкафа свободным текстом (часто кратко, с жаргоном).
 Твоя задача — перевести описание в структуру проекта и вызвать инструмент save_project.
 
-ГЛАВНОЕ ПРАВИЛО: в проект попадает ТОЛЬКО то, что есть в тексте пользователя.
-Никогда не придумывай оборудование, модули, каналы, реле, кнопки, лампы, клеммники,
-клеммы и позиции спецификации, которых нет в тексте. Не подставляй «типовую» или
-«примерную» схему. Если в сообщении только реквизиты — заполни только project,
-остальные разделы не присылай и спроси в questions, какое оборудование в шкафу.
-Лучше меньше, но точно.
+ГЛАВНОЕ ПРАВИЛО: пользователь пишет (часто списком), ЧТО будет в шкафу. По этому
+списку нужна полноценная электрическая схема, как в образце шкафа 2196.
+• Всё названное оборудование и сигналы должны попасть в проект.
+• То, без чего названное не заработает, но пользователь не расписал, достраивай
+  сам по типовому решению: распределение сигналов по выводам ПЛК, клеммники и клеммы
+  для полевых устройств (1XT1, 1XT2 …), промежуточные реле для колонны/зуммера,
+  автоматы питания 24 В по потребителям и шину минусов XM1, ввод 230 В (X0, QS1,
+  шина N, автомат БП), марки проводов, ссылки.
+• КАЖДОЕ такое своё решение, которое заказчик может захотеть иначе, внеси в confirm:
+  key — обозначение элемента на схеме («-A1:B3» для вывода модуля, «-1QFU2»,
+  «1XT1», «-K1»), text — коротко, что принял («датчик уровня — на A1:B3, питание
+  от 1QFU2»). Однотипное объединяй в один пункт. Не больше 8 пунктов. Не повторяй
+  одно и то же допущение в разных пунктах и не противоречь сам себе.
+• Не добавляй оборудование, которого нет в списке и которое не нужно для работы
+  названного (другие датчики, насосы, отбраковщики …).
+• questions — только то, без чего схему нарисовать нельзя (не больше 5 пунктов).
+  Про артикулы и производителей спрашивай ОДНИМ общим пунктом.
+• Исполнитель (contractor), если не назван, — ООО "ВЕКАС".
+• Ссылайся только на устройства, которые есть в этом проекте: обозначения из
+  образца (KBF1, 1KK1, CPW …) не переноси, если их нет в списке.
+• Типовое решение (как в образце 2196):
+  – ПЛК: каждый названный модуль — отдельный модуль в plc с тем типом, что назван
+    (CPU AM521-0808TN; A1 GL20-1600END входы; A2 GL20-0016ETP выходы; модули
+    нумеруются A1, A2 … в порядке перечисления). Встроенные входы CPU — быстрые
+    сигналы (энкодеры A/B) и сигналы БП/ИБП; остальные входы — на модули входов.
+    Встроенные выходы CPU — колонна, зуммер через реле K1…; выходы к внешним
+    устройствам (триггер камеры, останов, команды) — на модули выходов.
+  – Триггер, команда, останов, подсветка, колонна, зуммер — это ВЫХОДЫ; датчики,
+    кнопки, сигналы «готов/ошибка/факт» — ВХОДЫ.
+  – 24 В: БП U1 от автомата 230 В; ИБП 24 В DC питается от выходов БП, батарея GB1
+    — от ИБП; от ИБП — шина автоматов QFU по потребителям и шина минусов XM1.
+• Если в тексте только реквизиты — заполни project и спроси, что будет в шкафу.
 
 ПРАВИЛА
-1. Не выдумывай то, чего пользователь не говорил: артикулы, производителей, номера
-   листов, фамилии. Оставляй такие поля пустыми и перечисли главное недостающее в
-   questions (коротко, не больше 6 пунктов).
+1. Никогда не придумывай артикулы, производителей, фамилии и даты — оставляй пустыми.
 1б. Артикул и производитель у новой или изменённой позиции — ТОЛЬКО если пользователь их
    назвал в этом сообщении. Не подбирай и не «продолжай ряд» артикулов по аналогии
    (13350DEK, 13351DEK → 13353DEK — нельзя): оставь пустым и спроси в questions.
@@ -58,7 +82,10 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    общей строки не меняются. Если изделие удалено из схемы — убери его и из спецификации.
    Одна строка — одна позиция; designation — обозначения через «;»
    (напр. «QF1;QF2») или диапазоном «1K1...1K4»; qty — число строкой.
-5. Клеммы (terminals): блок = клеммник; строка = клемма или крышка. label — надпись
+5. Клеммы (terminals): клеммник должен содержать ровно те клеммы, на которые
+   ссылаются link/feed/common в других разделах («-1XT1:6» → клемма 6 в 1XT1) — номера
+   бери оттуда, свои не придумывай; допущение по клеммам уже внесено в confirm
+   разделом ПЛК — не дублируй его. Блок = клеммник; строка = клемма или крышка. label — надпись
    клеммы (L, N, PE, 1, 2 …); section — сечение («2,5», «1,5»); у концевой крышки
    label пустой; tier: 0 — одноярусная, 1/2 — ярусы двухъярусной (для яруса 2 строка
    с пустыми part_no/type_no); bridge — одинаковый номер у клемм под одной перемычкой.
@@ -75,14 +102,14 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    feed/feed_wire — питание контактов модуля входов (стрелка слева), common/common_wire
    — общий провод катушек модуля выходов; npn=true, если выходы коммутируют минус.
    desc — назначение вывода, переносы строк можно ставить «\\n».
-   link: только реально названная точка подключения («-1XT1:1», «-U1:DC OK»). Если в
-   тексте названо лишь устройство или коробка — пиши только его («+1KK1», «-UPS»),
-   НЕ сочиняй имена клемм и сигналов вроде «:A», «:BOSCH1_RDY». Если ничего не
-   названо — оставь пустым.
+   link: точка подключения («-1XT1:1», «-U1:DC OK»). Если пользователь её не назвал —
+   для полевого устройства назначь клемму клеммника по порядку (и внеси в confirm);
+   для внешнего шкафа/устройства пиши только его («+1KK1», «-UPS»). Не сочиняй имена
+   сигналов вроде «:BOSCH1_RDY».
    Выход, который идёт на промежуточное реле / колонну через реле, — element
    «катушка» с device реле (-K1); реле только для сопряжения — тоже катушка.
-   Если обозначение устройства в тексте не названо, не придумывай номер: оставь
-   device пустым у простых стрелок, а для реле/кнопок спроси в questions.
+   Если обозначение реле/кнопки/лампы не названо — назначь по порядку (K1, K2 …, S1,
+   SB1, H1) и внеси в confirm.
    Марку провода придумывай всегда: вход «<модуль>-DI<n>» (n с 0), выход
    «<модуль>-Q<n>», общий — по клемме («XM1-M3»). Ссылки на устройства в link, feed,
    common пиши с минусом: «-1XT1:1».
@@ -97,6 +124,8 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    leak), источник фазы (source -QS1:8) и нейтрали (n_source -XN:N1), клеммник, кабель,
    далее розетки (sockets) или стрелки к нагрузке (load_links: L, N, PE), caption.
    Правка: присылай изменённую линию целиком; удалённые — в remove_feeders.
+   Линия на feeders — для потребителей ВНЕ шкафа (принтер, лазер, чиллер …) с
+   клеммником и кабелем. Не дублируй то, что уже нарисовано ветвью на листе ввода.
 6в. Ввод и питание 230 В (mains): клеммник ввода (input_block X0, input_labels), кабель
    ввода, выключатель-разъединитель (qs QS1, qs_rating 40A, qs_poles), выходы QS
    (qs_outputs: pole 2/4/6/8, link «шина» — общая шина автоматов ветвей, «N» — на шину
@@ -109,7 +138,14 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    что load_tag ветви. Правка: присылай только изменённые поля и элементы — ветвь,
    устройство, выход QS, отвод N — каждый целиком; удалённые — в remove_mains_items
    (обозначение автомата/устройства, «QS:4» для выхода, «N:N3» для отвода).
-7. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
+   Ветви mains — только нагрузки внутри шкафа (розетка шкафа, вентилятор, свет, БП).
+   Потребители вне шкафа — отходящие линии feeders: на листе ввода для них только
+   стрелка к их автомату («стрелка», link -QF1:1) или выход QS.
+7. Открытые пункты. Если в запросе перечислены открытые пункты (вопросы и допущения
+   с номерами), сообщение пользователя может быть ответом на них («1 да», «3 — реле
+   на 230 В», «всё ок»). Внеси изменения по ответу, номера закрытых пунктов верни в
+   resolved («да», «ок», «согласен» — просто закрыть). Не повторяй закрытое в confirm.
+8. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
    Не пиши о том, что не менялось, и не упоминай «разделы» и «запросы».
 """
 
@@ -131,6 +167,12 @@ TOOL = {
             "summary": _str("1–3 предложения: что понял и что изменил"),
             "questions": {"type": "array", "items": {"type": "string"},
                           "description": "что уточнить у пользователя (до 6 пунктов)"},
+            "confirm": {"type": "array", "description": "твои допущения на подтверждение",
+                        "items": {"type": "object", "properties": {
+                            "key": _str("обозначение на схеме: -A1:B3, -1QFU2, 1XT1, -K1"),
+                            "text": _str("что принято, коротко")}}},
+            "resolved": {"type": "array", "items": {"type": "integer"},
+                         "description": "номера открытых пунктов, закрытых этим ответом"},
             "project": {"type": "object", "additionalProperties": False, "properties": {
                 "code": _str("шифр без суффикса документа, напр. ВКС.АСПУ.2196.СС1"),
                 "system_name": _str("наименование системы на титуле, напр. "
@@ -311,7 +353,7 @@ class AssistantError(Exception):
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
 GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders"),
-          ("mains",)]
+          ("mains",)]   # см. STAGES — порядок разбора
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
                "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
@@ -325,7 +367,7 @@ def _tool_for(sections) -> dict:
     extra = {"spec": ["remove_spec_rows"], "terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
              "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"],
              "mains": ["remove_mains_items"]}
-    keep = ["summary", "questions", *sections, *[x for s in sections for x in extra.get(s, [])]]
+    keep = ["summary", "questions", "confirm", "resolved", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
                              "properties": {k: props[k] for k in keep}}}
@@ -346,18 +388,29 @@ def _unwrap(out: dict) -> dict:
     return out
 
 
-def _call(api_key, current, message, sections, model, url, timeout) -> dict:
+def _call(api_key, current, message, sections, model, url, timeout,
+          open_items=None) -> dict:
     names = ", ".join(GROUP_NAMES[s] for s in sections)
     ctx = {k: current.get(k) for k in ("project", *sections) if current.get(k)}
     if ctx.get("spec"):                       # номера строк — чтобы править поштучно
         ctx["spec"] = [{"n": i, **row} for i, row in enumerate(ctx["spec"], 1)]
-    user = ("Текущий проект (JSON, только нужные разделы):\n"
-            + json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))
-            + "\n\nСообщение пользователя:\n" + message
-            + f"\n\nВ ЭТОМ запросе обрабатывай только: {names}. Другие разделы "
-              "разбираются отдельно — не упоминай их ни в summary, ни в questions. "
-              "Если в сообщении нет ничего для этих разделов — не присылай их, "
-              "summary оставь пустым.")
+    ref = {k: current.get(k) for k in SECTIONS
+           if k not in ctx and k not in ("project", "spec") and current.get(k)}
+    user = "Текущий проект (JSON, разделы этого запроса):\n" \
+        + json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))
+    if ref:
+        user += ("\n\nДругие разделы проекта — только для согласованности обозначений, "
+                 "клемм и ссылок (их не присылай и не меняй):\n"
+                 + json.dumps(ref, ensure_ascii=False, separators=(",", ":")))
+    if open_items:
+        user += "\n\nОткрытые пункты на согласовании:\n" + "\n".join(
+            f"{o['n']}. {('[' + o['key'] + '] ') if o.get('key') else ''}{o['text']}"
+            for o in open_items)
+    user += ("\n\nСообщение пользователя:\n" + message
+             + f"\n\nВ ЭТОМ запросе обрабатывай только: {names}. Другие разделы "
+               "разбираются отдельно — не упоминай их ни в summary, ни в questions, ни в "
+               "confirm. Если в сообщении нет ничего для этих разделов — не присылай их, "
+               "summary оставь пустым.")
     body = {
         "model": model,
         "max_tokens": 32000,
@@ -387,7 +440,7 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
     for block in res.get("content", []):
         if block.get("type") == "tool_use" and block.get("name") == "save_project":
             out = _unwrap(block.get("input") or {})
-            allowed = {"summary", "questions", *sections}
+            allowed = {"summary", "questions", "confirm", "resolved", *sections}
             if "spec" in sections:
                 allowed.add("remove_spec_rows")
             if "terminals" in sections:
@@ -404,28 +457,50 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
 
+# Порядок разбора: сначала ПЛК, потом питание (зная, что нужно запитать), потом
+# клеммники и спецификация (зная всё остальное). Внутри этапа — параллельно.
+STAGES = [[("plc",)], [("mains",)], [("power24", "feeders")],
+          [("project", "spec"), ("terminals",)]]
+
+
 def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
-        url: str = API_URL, timeout: float = 600) -> dict:
-    """Разбирает сообщение; возвращает изменённые разделы + summary/questions."""
+        url: str = API_URL, timeout: float = 600, open_items=None) -> dict:
+    """Разбирает сообщение; возвращает изменённые разделы + summary/questions/
+    confirm (допущения на подтверждение)/resolved (закрытые открытые пункты)."""
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(len(GROUPS)) as ex:
-        futs = [ex.submit(_call, api_key, current, message, g, model, url, timeout)
-                for g in GROUPS]
-        parts = [f.result() for f in futs]      # первая ошибка пробрасывается
-    result: dict = {"summary": "", "questions": []}
-    for part in parts:
-        if not any(v for k, v in part.items() if k not in ("summary", "questions")):
-            continue                      # группе нечего менять — её рассуждения не нужны
-        for k, v in part.items():
-            if k == "summary":
-                if v and v.strip():
-                    result["summary"] = (result["summary"] + " " + v.strip()).strip()
-            elif k == "questions":
-                result["questions"] += [q for q in v or [] if q and q not in result["questions"]]
-            else:
-                result[k] = v
-    _guard_articles(result, current, message)
+    result: dict = {"summary": "", "questions": [], "confirm": [], "resolved": []}
+    work = dict(current or {})
+    for stage in STAGES:
+        with ThreadPoolExecutor(len(stage)) as ex:
+            futs = [ex.submit(_call, api_key, work, message, g, model, url, timeout,
+                              open_items) for g in stage]
+            parts = [f.result() for f in futs]      # первая ошибка пробрасывается
+        for part in parts:
+            if not any(v for k, v in part.items()
+                       if k not in ("summary", "questions", "confirm", "resolved")):
+                # группе нечего менять — её рассуждения не нужны, закрытые пункты — нужны
+                result["resolved"] += [x for x in part.get("resolved") or []
+                                       if isinstance(x, int)]
+                continue
+            for k, v in part.items():
+                if k == "summary":
+                    if v and v.strip():
+                        result["summary"] = (result["summary"] + " " + v.strip()).strip()
+                elif k == "questions":
+                    result["questions"] += [q for q in v or [] if q
+                                            and q not in result["questions"]]
+                elif k == "confirm":
+                    result["confirm"] += [c for c in v or [] if isinstance(c, dict)
+                                          and str(c.get("text") or "").strip()]
+                elif k == "resolved":
+                    result["resolved"] += [x for x in v or [] if isinstance(x, int)]
+                else:
+                    result[k] = v
+            work = merge(work, {k: v for k, v in part.items()
+                                if k not in ("summary", "questions", "confirm", "resolved")})
+    _guard_articles(result, current or {}, message)
     result["questions"] = result["questions"][:8]
+    result["confirm"] = result["confirm"][:12]
     return result
 
 
@@ -512,8 +587,14 @@ def _merge_spec(cur: list, new: list, remove: list) -> list:
             return int(v)
         except (TypeError, ValueError):
             return None
-    if not cur or (not remove and len(new) >= len(cur)
-                   and all(r.get("n") in (None, "") for r in new)):
+    def looks_full():
+        """Модель прислала весь список заново (без номеров, с почти всеми строками)."""
+        if remove or any(r.get("n") not in (None, "") for r in new):
+            return False
+        have = {str(r.get("designation", "")).strip().upper() for r in new}
+        old_d = [str(r.get("designation", "")).strip().upper() for r in cur]
+        return len(new) >= len(cur) and sum(d in have for d in old_d) >= 0.8 * len(old_d)
+    if not cur or looks_full():
         # новый проект или модель прислала весь список заново
         return [{k: v for k, v in r.items() if k != "n"} for r in new]
     rows = [dict(r) for r in cur]

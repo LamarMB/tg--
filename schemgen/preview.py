@@ -125,3 +125,81 @@ def to_jpeg(img, quality: int = 85) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=quality)
     return buf.getvalue()
+
+
+# ------------------------------------------------------------ метки черновика
+def _k(v) -> str:
+    return str(v or "").strip()
+
+
+def _by(items, key):
+    return {key(x): x for x in items or [] if key(x)}
+
+
+def changed_keys(old: dict, new: dict) -> list[str]:
+    """Что поменялось между двумя версиями проекта (dict) — обозначения для синих
+    меток в PDF: модули и выводы ПЛК, клеммники, автоматы, линии, устройства,
+    строки спецификации. Для нового проекта — пусто (менять нечего отмечать)."""
+    old, new = old or {}, new or {}
+    if not any(old.get(k) for k in ("spec", "terminals", "plc", "power24", "feeders", "mains")):
+        return []
+    out: list[str] = []
+
+    # ПЛК: изменённые выводы; новый модуль — целиком
+    om = _by(old.get("plc"), lambda m: _k(m.get("key") or m.get("tag")))
+    for key, m in _by(new.get("plc"), lambda m: _k(m.get("key") or m.get("tag"))).items():
+        tag = _k(m.get("tag"))
+        o = om.get(key)
+        if o is None:
+            out.append("-" + tag)
+            continue
+        if o == m:
+            continue
+        oc = _by(o.get("channels"), lambda c: _k(c.get("pin")))
+        chans = [c for c in m.get("channels") or [] if oc.get(_k(c.get("pin"))) != c]
+        if chans:
+            out += [f"-{tag}:{_k(c.get('pin'))}" for c in chans]
+        else:
+            out.append("-" + tag)
+    # клеммники
+    ot = _by(old.get("terminals"), lambda b: _k(b.get("name")))
+    out += [n for n, b in _by(new.get("terminals"), lambda b: _k(b.get("name"))).items()
+            if ot.get(n) != b]
+    # питание 24 В: автоматы и шины минусов
+    op, np_ = old.get("power24") or {}, new.get("power24") or {}
+    obr = {_k(b.get("tag")): b for g in op.get("groups") or [] for b in g.get("breakers") or []}
+    for g in np_.get("groups") or []:
+        out += [_k(b.get("tag")) for b in g.get("breakers") or [] if obr.get(_k(b.get("tag"))) != b]
+    omn = _by(op.get("minus"), lambda m: _k(m.get("name")))
+    out += [n for n, m in _by(np_.get("minus"), lambda m: _k(m.get("name"))).items()
+            if omn.get(n) != m]
+    # линии 230 В
+    of = _by(old.get("feeders"), lambda f: _k(f.get("tag")))
+    out += [t for t, f in _by(new.get("feeders"), lambda f: _k(f.get("tag"))).items()
+            if of.get(t) != f]
+    # ввод 230 В
+    om2, nm = old.get("mains") or {}, new.get("mains") or {}
+    obr2 = _by(om2.get("branches"), lambda b: _k(b.get("tag")) or _k(b.get("load_tag")))
+    for b in nm.get("branches") or []:
+        k = _k(b.get("tag")) or _k(b.get("load_tag"))
+        if obr2.get(k) != b:
+            out += [x for x in (_k(b.get("tag")), _k(b.get("load_tag"))) if x]
+    od = _by(om2.get("devices"), lambda d: _k(d.get("tag")))
+    out += [t for t, d in _by(nm.get("devices"), lambda d: _k(d.get("tag"))).items()
+            if od.get(t) != d]
+    simple = ("input_block", "input_cable", "qs", "qs_rating", "qs_poles", "qs_outputs",
+              "n_bus", "n_taps")
+    if nm and any(om2.get(k) != nm.get(k) for k in simple):
+        out.append(_k(nm.get("qs")) or "QS1")
+    # спецификация: новые/изменённые строки — их обозначения
+    osp = [dict(r) for r in old.get("spec") or []]
+    for r in new.get("spec") or []:
+        if r not in osp:
+            out += [x.strip() for x in _k(r.get("designation")).split(";") if x.strip()
+                    and "..." not in x]
+    seen, res = set(), []
+    for x in out:
+        if x and x.upper() not in seen:
+            seen.add(x.upper())
+            res.append(x)
+    return res

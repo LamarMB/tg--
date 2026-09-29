@@ -155,6 +155,7 @@ class BotFlow(unittest.TestCase):
         FakeTelegram.claude_reply = {
             "summary": "Шкаф с ПЛК, 2 входа.",
             "questions": ["Артикул ПЛК?"],
+            "confirm": [{"key": "-CPU:A2", "text": "реле K1 на входе A2"}],
             "project": {"code": "ВКС.ТЕСТ.1", "customer": "Заказчик"},
             "spec": [{"designation": "CPU", "name": "Контроллер", "qty": "1"}],
             "plc": [{"key": "CPU", "tag": "CPU", "type": "AM600", "kind": "in",
@@ -164,13 +165,25 @@ class BotFlow(unittest.TestCase):
                          {"pin": "A2", "desc": "Реле", "element": "ттр", "device": "K1"}]}]}
         self.bot.handle(self.msg(text="Шкаф ВКС.ТЕСТ.1, CPU AM600, на A1 датчик..."))
         methods = [m for m, _ in FakeTelegram.sent]
-        # сначала картинки листов и вопрос с кнопками, PDF ещё нет
-        self.assertTrue({"sendPhoto", "sendMediaGroup"} & set(methods))
-        self.assertNotIn("sendDocument", methods)
+        # черновик PDF с метками + пункты с кнопками
+        drafts = [d for m, d in FakeTelegram.sent if m == "sendDocument"]
+        self.assertEqual(len(drafts), 1)
+        self.assertIn("ЧЕРНОВИК".encode(), drafts[0])
+        self.assertNotIn("sendPhoto", methods)
         last = json.loads([d for m, d in FakeTelegram.sent if m == "sendMessage"][-1])
         self.assertIn("inline_keyboard", last["reply_markup"])
-        self.assertIn("Артикул ПЛК?", last["text"])
+        self.assertIn("1. реле K1 на входе A2 (стр.", last["text"])     # метка найдена
+        self.assertIn("2. Артикул ПЛК?", last["text"])
         self.assertEqual(self.bot.load_state(42), {})           # ещё не применено
+        # ответ по номеру: пункт 1 закрыт, черновик на основе черновика
+        FakeTelegram.claude_reply = {"summary": "Принял.", "resolved": [1],
+                                     "project": {"customer": "Заказчик 2"}}
+        self.bot.handle(self.msg(text="1 да"))
+        ctx = FakeTelegram.claude_requests[-1]["messages"][0]["content"]
+        self.assertIn("1. [-CPU:A2] реле K1 на входе A2", ctx)
+        pend = self.bot.load_pending(42)
+        self.assertEqual([o["text"] for o in pend["_open"]], ["Артикул ПЛК?"])
+        self.assertEqual(pend["project"]["customer"], "Заказчик 2")
         # подтверждение
         FakeTelegram.sent = []
         self.bot.handle(self.ok())
@@ -178,18 +191,20 @@ class BotFlow(unittest.TestCase):
         self.assertEqual(len(docs), 2)                          # PDF + Excel
         self.assertIn(b"%PDF", docs[0])
         state = self.bot.load_state(42)
+        self.assertNotIn("_open", state)
         self.assertEqual(state["plc"][0]["channels"][1]["device"], "-K1")
         # правка -> отмена: проект не меняется
         FakeTelegram.claude_reply = {"summary": "Добавил блок питания.",
-                                     "spec": [{"designation": "CPU", "name": "Контроллер"},
-                                              {"designation": "U1", "name": "БП 24В"}]}
+                                     "spec": [{"n": None, "designation": "U1",
+                                               "name": "БП 24В"}]}
         self.bot.handle(self.msg(text="добавь блок питания U1"))
         self.bot.handle(self.ok("undo"))
         self.assertEqual(len(self.bot.load_state(42)["spec"]), 1)
-        # правка -> принять
+        # правка -> принять; изменённое обведено синим
+        FakeTelegram.sent = []
         self.bot.handle(self.msg(text="добавь блок питания U1"))
-        sent_ctx = FakeTelegram.claude_requests[-1]["messages"][0]["content"]
-        self.assertIn("ВКС.ТЕСТ.1", sent_ctx)
+        cap = [d for m, d in FakeTelegram.sent if m == "sendDocument"][0]
+        self.assertIn("Изменения".encode(), cap)
         self.bot.handle(self.ok())
         state = self.bot.load_state(42)
         self.assertEqual(len(state["spec"]), 2)

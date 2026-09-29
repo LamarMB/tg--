@@ -79,7 +79,7 @@ def _fragment(p: Pen, blk: TerminalBlock, rows, a: int, b: int, last: bool,
     p.rect(1029.0, y, 1081.4, y + 2.8, stroke=False, fill=True)
     p.rect(1029.0, y + 19.8, 1082.8, y + ROW_H, stroke=False, fill=True)
     p.rect(980.8, y + 2.8, 1122.5, y + 19.8, lw=0.37)
-    p.text_in_box(980.8, y + 2.8, 1122.5, y + 19.8, blk.name, 12.8)
+    p.text_in_box(980.8, y + 2.8, 1122.5, y + 19.8, blk.name, 12.8, tag=True)
 
     yr = y + ROW_H
     part = rows[a:b]

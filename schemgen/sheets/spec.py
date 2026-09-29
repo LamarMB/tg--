@@ -94,7 +94,7 @@ def _painter(rows: list[_Row]):
             base = y + 11.8
             p.text((COLS[0] + COLS[1]) / 2, base, str(r.n), SIZE, "center")
             for k, ln in enumerate(r.des):
-                p.text(130.4, base + k * LINE, ln, SIZE)
+                p.text(130.4, base + k * LINE, ln, SIZE, tag=True)
             for k, ln in enumerate(r.name):
                 p.text(NAME_X, base + 1.0 + k * LINE, ln, SIZE)
             for k, ln in enumerate(r.art):
