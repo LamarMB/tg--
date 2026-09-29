@@ -19,6 +19,7 @@ def doc_to_dict(doc: Document) -> dict:
                       for b in doc.terminals],
         "plc": [_mod_to_dict(m) for m in doc.plc],
         "power24": _p24_to_dict(doc.power24),
+        "feeders": [asdict(f) for f in doc.feeders or []],
     }
 
 
@@ -151,7 +152,28 @@ def dict_to_doc(d: dict) -> Document:
                                            _s(c.get("ref")), _s(c.get("param"))))
         if mod.tag and mod.channels:
             plc.append(mod)
-    return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")))
+    return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
+                    _dict_to_feeders(d.get("feeders")))
+
+
+def _dict_to_feeders(items):
+    from .e3.power230 import Feeder
+    out = []
+    for f in items or []:
+        tag = _dash(f.get("tag"))
+        if not tag:
+            continue
+        kind = _s(f.get("kind")).lower()
+        out.append(Feeder(
+            tag, "ав" if kind in ("ав", "ab", "mcb") else "авдт", _s(f.get("rating")),
+            _s(f.get("leak")), _s(f.get("section")) or "2,5", _dash(f.get("source")),
+            _s(f.get("source_ref")), _dash(f.get("n_source")), _s(f.get("n_ref")),
+            _s(f.get("terminal")).lstrip("-"), _s(f.get("cable")).lstrip("-"),
+            _s(f.get("cable_type")), _s(f.get("cable_cores")), _s(f.get("zone")),
+            [_s(x).lstrip("-") for x in f.get("sockets") or [] if _s(x)],
+            _s(f.get("socket_rating")), [_s(x) for x in f.get("load_links") or []][:3],
+            _s(f.get("load_ref")), _s(f.get("caption"))))
+    return out
 
 
 def check(doc: Document) -> list[str]:

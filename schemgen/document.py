@@ -1,7 +1,7 @@
 """Сборка PDF из модели."""
 from __future__ import annotations
 
-from .e3 import io_sheets, power24
+from .e3 import io_sheets, power24, power230
 from .frame import draw_frame
 from .model import Document
 from .pen import Pen
@@ -39,28 +39,36 @@ def render_pdf(doc: Document, path: str) -> int:
             pages += terminal_pages(doc.terminals)
         total += _emit(pen, pr, _code(pr, pr.spec_doc_suffix), pr.spec_doc_name, pages)
 
-    # Документ Э3: титул + питание 24 В + листы входов/выходов ПЛК.
+    # Документ Э3: титул + силовые листы + питание 24 В + листы ПЛК.
     # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
     # чтобы ссылки между листами разных типов подставлялись сами.
-    p24 = doc.power24 if doc.power24 else None
-    if doc.plc or p24:
+    if doc.plc or doc.power24 or doc.feeders:
         xr = io_sheets.XRef()
         numbers, pages = [1], [title_page(pr)]
         nxt = 2
-        p24_sheets = power24.layout(p24) if p24 else []
+
+        def start(field_value) -> int:
+            v = str(field_value or "").strip()
+            return max(int(v), nxt) if v.isdigit() else nxt
+
+        plan = []                                     # (номер, painter)
+        f_sheets = power230.layout(doc.feeders) if doc.feeders else []
+        if f_sheets:
+            nums = power230.register(f_sheets, start(pr.e3_feeders_sheet), xr)
+            plan += [(n, power230.painter(sh, xr)) for n, sh in zip(nums, f_sheets)]
+            nxt = nums[-1] + 1
+        p24_sheets = power24.layout(doc.power24) if doc.power24 else []
         if p24_sheets:
-            start = int(pr.e3_power24_sheet) if str(pr.e3_power24_sheet).isdigit() else nxt
-            power24.register(p24_sheets, max(start, nxt), xr)
+            power24.register(p24_sheets, start(pr.e3_power24_sheet), xr)
+            plan += [(sh.number, power24.painter(sh, xr)) for sh in p24_sheets]
             nxt = p24_sheets[-1].number + 1
         io_pages = io_sheets.layout(doc.plc) if doc.plc else []
         if io_pages:
-            io_sheets.register(io_pages, max(int(pr.e3_first_io_sheet or 2), nxt), xr)
-        for sh in p24_sheets:
-            numbers.append(sh.number)
-            pages.append(power24.painter(sh, xr))
-        for pg in io_pages:
-            numbers.append(pg.number)
-            pages.append(io_sheets.painter(pg, xr))
+            io_sheets.register(io_pages, start(pr.e3_first_io_sheet), xr)
+            plan += [(pg.number, io_sheets.painter(pg, xr)) for pg in io_pages]
+        for n, draw in plan:
+            numbers.append(n)
+            pages.append(draw)
         total += _emit(pen, pr, _code(pr, pr.e3_doc_suffix), pr.e3_doc_name, pages,
                        numbers, sheets_total=numbers[-1])
 

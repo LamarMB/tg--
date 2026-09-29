@@ -189,3 +189,52 @@ def write_power24(wb, pw, header) -> None:
         for t in m.taps:
             ws.append([m.name, "отвод вверх" if t.up else "отвод вниз", t.clamp, "",
                        *(t.wire + ["", "", ""])[:3], t.link, t.ref, "", "", ""])
+
+
+# ------------------------------------------------------------ Линии 230 В
+F_COLS = ["Автомат", "Тип", "Номинал", "Утечка", "Сечение", "Питание L", "Ссылка L",
+          "Питание N", "Ссылка N", "Клеммник", "Кабель", "Марка кабеля", "Жилы", "Зона",
+          "Розетки", "Номинал розеток", "Нагрузка L", "Нагрузка N", "Нагрузка PE",
+          "Ссылка нагрузки", "Подпись"]
+
+
+def read_feeders(wb, find_sheet, table, problems):
+    from .power230 import Feeder
+    ws = find_sheet(wb, "Линии 230В", False, problems) or \
+        find_sheet(wb, "Линии 230 В", False, problems)
+    if ws is None:
+        return []
+    out = []
+    for rec in table(ws, F_COLS, problems):
+        tag = rec["Автомат"]
+        if not tag:
+            problems.append("Лист «Линии 230В»: строка без обозначения автомата.")
+            continue
+        kind = rec["Тип"].strip().lower() or "авдт"
+        if kind not in ("авдт", "ав"):
+            problems.append(f"Лист «Линии 230В», {tag}: тип «{rec['Тип']}» — нужно АВДТ или АВ.")
+            continue
+        socks = [x.strip() for x in rec["Розетки"].replace(",", ";").split(";") if x.strip()]
+        loads = [rec["Нагрузка L"], rec["Нагрузка N"], rec["Нагрузка PE"]]
+        out.append(Feeder(tag if tag.startswith("-") else "-" + tag, kind, rec["Номинал"],
+                          rec["Утечка"], rec["Сечение"] or "2,5", rec["Питание L"],
+                          rec["Ссылка L"], rec["Питание N"], rec["Ссылка N"],
+                          rec["Клеммник"], rec["Кабель"], rec["Марка кабеля"], rec["Жилы"],
+                          rec["Зона"], socks, rec["Номинал розеток"],
+                          loads if any(loads) else [], rec["Ссылка нагрузки"], rec["Подпись"]))
+    return out
+
+
+def write_feeders(wb, feeders, header) -> None:
+    ws = wb.create_sheet("Линии 230В")
+    header(ws, F_COLS, [9, 7, 9, 8, 8, 12, 8, 12, 8, 9, 9, 24, 8, 7, 18, 9, 14, 14, 14, 10, 30])
+    from openpyxl.worksheet.datavalidation import DataValidation
+    dv = DataValidation(type="list", allow_blank=True, formula1='"АВДТ,АВ"')
+    ws.add_data_validation(dv)
+    dv.add("B2:B500")
+    for f in feeders or []:
+        loads = (f.load_links + ["", "", ""])[:3]
+        ws.append([f.tag, "АВДТ" if f.kind == "авдт" else "АВ", f.rating, f.leak, f.section,
+                   f.source, f.source_ref, f.n_source, f.n_ref, f.terminal, f.cable,
+                   f.cable_type, f.cable_cores, f.zone, ";".join(f.sockets), f.socket_rating,
+                   *loads, f.load_ref, f.caption])

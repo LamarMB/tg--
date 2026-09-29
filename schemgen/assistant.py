@@ -42,6 +42,7 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
 3. Если в проекте уже есть данные, меняй только то, о чём просит пользователь:
    project — только изменённые поля;
    power24 — только изменённые группы/шины минусов, каждая целиком;
+   feeders — только изменённые/новые линии 230 В, каждая целиком;
    spec — если меняется, весь список целиком (все позиции, включая неизменённые);
    terminals — только изменённые/новые клеммники, каждый целиком (все строки);
      удалённые клеммники перечисли в remove_terminal_blocks;
@@ -89,6 +90,10 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    Правка: присылай изменённую группу / шину целиком (все автоматы / отводы). Чтобы
    убрать один автомат — пришли его группу целиком без него. remove_power24_groups —
    только для удаления группы или шины целиком. Ссылки «лист.столбец» не выдумывай — программа ставит их сама.
+6б. Отходящие линии 230 В (feeders): линия = автомат (tag -QF1, kind авдт/ав, rating,
+   leak), источник фазы (source -QS1:8) и нейтрали (n_source -XN:N1), клеммник, кабель,
+   далее розетки (sockets) или стрелки к нагрузке (load_links: L, N, PE), caption.
+   Правка: присылай изменённую линию целиком; удалённые — в remove_feeders.
 7. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
    Не пиши о том, что не менялось, и не упоминай «разделы» и «запросы».
 """
@@ -163,6 +168,27 @@ TOOL = {
                         "wire": WIRE,
                         "link": _str("куда: -ES1:V-, -A1:A9"),
                         "ref": _str("ссылка вручную")}}}}}}}},
+            "feeders": {"type": "array", "description": "Лист «Отходящие линии 230 В»",
+                        "items": {"type": "object", "properties": {
+                "tag": _str("автомат: -QF1"),
+                "kind": {"type": "string", "enum": ["авдт", "ав"],
+                         "description": "авдт — диф.автомат 1P+N, ав — автомат 1P"},
+                "rating": _str("номинал: 20A 'C'"), "leak": _str("ток утечки: 30мА"),
+                "section": _str("сечение проводов, мм²: 2,5"),
+                "source": _str("откуда фаза: -QS1:8"), "source_ref": _str("ссылка вручную"),
+                "n_source": _str("откуда нейтраль: -XN:N1"), "n_ref": _str("ссылка вручную"),
+                "terminal": _str("клеммник L/N/PE: X1"), "cable": _str("кабель: W1LR1"),
+                "cable_type": _str("марка кабеля: FLEXICORE 130H-нг(A)-HF"),
+                "cable_cores": _str("жилы: 3G2,5"), "zone": _str("зона/место: +ZM"),
+                "sockets": {"type": "array", "items": {"type": "string"},
+                            "description": "розетки гирляндой: 1XS1, 1XS2 …"},
+                "socket_rating": _str("номинал розеток: 16 A"),
+                "load_links": {"type": "array", "items": {"type": "string"},
+                               "description": "если не розетки: куда L, N, PE (стрелки)"},
+                "load_ref": _str("ссылка нагрузки"),
+                "caption": _str("подпись: «Питание лазера … (поток 1)»")}}},
+            "remove_feeders": {"type": "array", "items": {"type": "string"},
+                               "description": "обозначения линий (автоматов), которые удалить"},
             "remove_power24_groups": {"type": "array", "items": {"type": "string"},
                                       "description": "имена групп автоматов / шин минусов, "
                                                      "которые удалить"},
@@ -213,7 +239,7 @@ TOOL = {
     },
 }
 
-SECTIONS = ("project", "spec", "terminals", "plc", "power24")
+SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders")
 
 
 class AssistantError(Exception):
@@ -222,16 +248,17 @@ class AssistantError(Exception):
 
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
-GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24",)]
+GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders")]
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
-               "power24": "распределение питания 24 В (автоматы QFU, шина минусов)"}
+               "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
+               "feeders": "отходящие линии 230 В (QF, клеммы, кабели, розетки)"}
 
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
     extra = {"terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
-             "power24": ["remove_power24_groups"]}
+             "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"]}
     keep = ["summary", "questions", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
@@ -299,6 +326,8 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
                 allowed.add("remove_plc_modules")
             if "power24" in sections:
                 allowed.add("remove_power24_groups")
+            if "feeders" in sections:
+                allowed.add("remove_feeders")
             return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
@@ -341,9 +370,12 @@ def merge(current: dict, update: dict) -> dict:
         out["spec"] = update["spec"]
     for sec, key, rm in (("terminals", lambda b: str(b.get("name", "")).strip().upper(),
                           "remove_terminal_blocks"),
-                         ("plc", _mkey, "remove_plc_modules")):
+                         ("plc", _mkey, "remove_plc_modules"),
+                         ("feeders", lambda f: str(f.get("tag", "")).strip().lstrip("-").upper(),
+                          "remove_feeders")):
         items = list(out.get(sec) or [])
-        remove = {str(x).strip().upper() for x in update.get(rm) or []}
+        remove = {str(x).strip().lstrip("-").upper() if sec == "feeders" else
+                  str(x).strip().upper() for x in update.get(rm) or []}
         items = [x for x in items if key(x) not in remove]
         for new in update.get(sec) or []:
             k = key(new)

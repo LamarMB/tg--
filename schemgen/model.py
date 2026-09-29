@@ -26,7 +26,8 @@ class Project:
     e3_doc_suffix: str = "Э3"
     e3_doc_name: str = "Схема электрическая принципиальная"
     e3_first_io_sheet: str = "2"   # с какого номера листа начинаются листы ПЛК
-    e3_power24_sheet: str = ""     # номер листа «Питание 24 В» (пусто — сразу после титула)
+    e3_power24_sheet: str = ""     # номер листа «Питание 24 В» (пусто — следующий по порядку)
+    e3_feeders_sheet: str = ""     # номер листа «Отходящие линии 230 В»
     litera: str = ""
     mass: str = ""
     scale: str = ""
@@ -82,3 +83,4 @@ class Document:
     terminals: list[TerminalBlock] = field(default_factory=list)
     plc: list = field(default_factory=list)       # list[e3.model.PlcModule]
     power24: object = None                        # e3.power24.Power24
+    feeders: list = field(default_factory=list)   # list[e3.power230.Feeder]
