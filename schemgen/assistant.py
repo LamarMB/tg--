@@ -36,9 +36,14 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    реле, SB — кнопки, HL — лампы/колонны, XT/X — клеммники, A — модули), маркировку
    проводов по образцу «A1-DI0», «CPU-Q0» (цвет WH/BK, сечение 0,5 для сигналов, если
    не сказано иное), № выводов модулей по порядку (A1…A8, B1…B8, COM — A9/B9).
-3. Если в проекте уже есть данные, меняй только то, о чём просит пользователь, а в
-   save_project присылай ТОЛЬКО изменённые разделы (project / spec / terminals / plc),
-   каждый раздел — целиком в новом виде. Неизменённые разделы не присылай.
+3. Если в проекте уже есть данные, меняй только то, о чём просит пользователь:
+   project — только изменённые поля;
+   spec — если меняется, весь список целиком (все позиции, включая неизменённые);
+   terminals — только изменённые/новые клеммники, каждый целиком (все строки);
+     удалённые клеммники перечисли в remove_terminal_blocks;
+   plc — только изменённые/новые модули, каждый целиком (все каналы, как были, с
+     правкой); удалённые модули перечисли в remove_plc_modules (по key).
+   Неизменённое не присылай.
 4. Спецификация (spec): одна строка — одна позиция; designation — обозначения через «;»
    (напр. «QF1;QF2») или диапазоном «1K1...1K4»; qty — число строкой.
 5. Клеммы (terminals): блок = клеммник; строка = клемма или крышка. label — надпись
@@ -69,7 +74,8 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    Марку провода придумывай всегда: вход «<модуль>-DI<n>» (n с 0), выход
    «<модуль>-Q<n>», общий — по клемме («XM1-M3»). Ссылки на устройства в link, feed,
    common пиши с минусом: «-1XT1:1».
-7. summary — 1–3 предложения по-русски: что понял и что изменил.
+7. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
+   Не пиши о том, что не менялось, и не упоминай «разделы» и «запросы».
 """
 
 def _str(desc: str) -> dict:
@@ -113,6 +119,10 @@ TOOL = {
                 "qty": _str("количество"),
                 "manufacturer": _str("производитель (только если назван)"),
                 "note": _str("примечание")}}},
+            "remove_terminal_blocks": {"type": "array", "items": {"type": "string"},
+                                       "description": "имена клеммников, которые удалить"},
+            "remove_plc_modules": {"type": "array", "items": {"type": "string"},
+                                   "description": "key модулей ПЛК, которые удалить"},
             "terminals": {"type": "array", "items": {"type": "object", "properties": {
                 "name": _str("имя клеммника: X1, 1XT1 ..."),
                 "rows": {"type": "array", "items": {"type": "object", "properties": {
@@ -172,7 +182,8 @@ GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спец
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
-    keep = ["summary", "questions", *sections]
+    extra = {"terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"]}
+    keep = ["summary", "questions", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
                              "properties": {k: props[k] for k in keep}}}
@@ -232,7 +243,12 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
     for block in res.get("content", []):
         if block.get("type") == "tool_use" and block.get("name") == "save_project":
             out = _unwrap(block.get("input") or {})
-            return {k: v for k, v in out.items() if k in ("summary", "questions", *sections)}
+            allowed = {"summary", "questions", *sections}
+            if "terminals" in sections:
+                allowed.add("remove_terminal_blocks")
+            if "plc" in sections:
+                allowed.add("remove_plc_modules")
+            return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
 
@@ -258,14 +274,32 @@ def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
     return result
 
 
+def _mkey(m: dict) -> str:
+    return str(m.get("key") or m.get("tag") or "").strip().upper()
+
+
 def merge(current: dict, update: dict) -> dict:
-    """Применяет присланные разделы к текущему проекту."""
+    """Применяет правку: project — по полям, spec — целиком, клеммники и модули
+    ПЛК — поштучно (по имени / key), удаление — явными списками."""
     out = {k: current.get(k) for k in SECTIONS}
     if update.get("project"):
         pr = dict(out.get("project") or {})
         pr.update({k: v for k, v in update["project"].items() if v is not None})
         out["project"] = pr
-    for k in ("spec", "terminals", "plc"):
-        if update.get(k):  # пустой список = раздел не менялся
-            out[k] = update[k]
+    if update.get("spec"):
+        out["spec"] = update["spec"]
+    for sec, key, rm in (("terminals", lambda b: str(b.get("name", "")).strip().upper(),
+                          "remove_terminal_blocks"),
+                         ("plc", _mkey, "remove_plc_modules")):
+        items = list(out.get(sec) or [])
+        remove = {str(x).strip().upper() for x in update.get(rm) or []}
+        items = [x for x in items if key(x) not in remove]
+        for new in update.get(sec) or []:
+            k = key(new)
+            idx = next((i for i, x in enumerate(items) if key(x) == k), None)
+            if idx is None:
+                items.append(new)
+            else:
+                items[idx] = new
+        out[sec] = items
     return out

@@ -114,6 +114,8 @@ class BotFlow(unittest.TestCase):
 
     def setUp(self):
         FakeTelegram.sent = []
+        for f in Path(self.tmp.name).glob("*.json"):
+            f.unlink()
 
     def msg(self, **kw):
         m = {"message_id": 1, "chat": {"id": 42}, "from": {"id": 7}}
@@ -144,7 +146,12 @@ class BotFlow(unittest.TestCase):
         methods = [m for m, _ in FakeTelegram.sent]
         self.assertEqual(methods, ["sendDocument", "sendMessage"])
 
-    def test_text_to_pdf_and_edit(self):
+    def ok(self, data="ok"):
+        return {"update_id": 2, "callback_query": {
+            "id": "q", "from": {"id": 7}, "data": data,
+            "message": {"message_id": 5, "chat": {"id": 42}}}}
+
+    def test_text_preview_confirm_and_edit(self):
         FakeTelegram.claude_reply = {
             "summary": "Шкаф с ПЛК, 2 входа.",
             "questions": ["Артикул ПЛК?"],
@@ -156,25 +163,43 @@ class BotFlow(unittest.TestCase):
                           "link": "-XT1:1"},
                          {"pin": "A2", "desc": "Реле", "element": "ттр", "device": "K1"}]}]}
         self.bot.handle(self.msg(text="Шкаф ВКС.ТЕСТ.1, CPU AM600, на A1 датчик..."))
-        docs = [d for m, d in FakeTelegram.sent if m == "sendDocument"]
-        self.assertEqual(len(docs), 2)                      # PDF + Excel
-        self.assertIn(b"%PDF", docs[0])
-        texts = [json.loads(d)["text"] for m, d in FakeTelegram.sent if m == "sendMessage"]
-        self.assertTrue(any("Артикул ПЛК?" in t for t in texts))
-        state = self.bot.load_state(42)
-        self.assertEqual(state["project"]["code"], "ВКС.ТЕСТ.1")
-        self.assertEqual(state["plc"][0]["channels"][1]["device"], "-K1")
-        # правка: модель присылает только спецификацию — ПЛК остаётся
+        methods = [m for m, _ in FakeTelegram.sent]
+        # сначала картинки листов и вопрос с кнопками, PDF ещё нет
+        self.assertTrue({"sendPhoto", "sendMediaGroup"} & set(methods))
+        self.assertNotIn("sendDocument", methods)
+        last = json.loads([d for m, d in FakeTelegram.sent if m == "sendMessage"][-1])
+        self.assertIn("inline_keyboard", last["reply_markup"])
+        self.assertIn("Артикул ПЛК?", last["text"])
+        self.assertEqual(self.bot.load_state(42), {})           # ещё не применено
+        # подтверждение
         FakeTelegram.sent = []
+        self.bot.handle(self.ok())
+        docs = [d for m, d in FakeTelegram.sent if m == "sendDocument"]
+        self.assertEqual(len(docs), 2)                          # PDF + Excel
+        self.assertIn(b"%PDF", docs[0])
+        state = self.bot.load_state(42)
+        self.assertEqual(state["plc"][0]["channels"][1]["device"], "-K1")
+        # правка -> отмена: проект не меняется
         FakeTelegram.claude_reply = {"summary": "Добавил блок питания.",
                                      "spec": [{"designation": "CPU", "name": "Контроллер"},
                                               {"designation": "U1", "name": "БП 24В"}]}
         self.bot.handle(self.msg(text="добавь блок питания U1"))
+        self.bot.handle(self.ok("undo"))
+        self.assertEqual(len(self.bot.load_state(42)["spec"]), 1)
+        # правка -> принять
+        self.bot.handle(self.msg(text="добавь блок питания U1"))
         sent_ctx = FakeTelegram.claude_requests[-1]["messages"][0]["content"]
-        self.assertIn("ВКС.ТЕСТ.1", sent_ctx)                # текущий проект ушёл в модель
+        self.assertIn("ВКС.ТЕСТ.1", sent_ctx)
+        self.bot.handle(self.ok())
         state = self.bot.load_state(42)
         self.assertEqual(len(state["spec"]), 2)
         self.assertEqual(len(state["plc"]), 1)
+
+    def test_base_template(self):
+        self.bot.handle(self.msg(text="/base"))
+        state = self.bot.load_state(42)
+        self.assertEqual(state["project"]["code"], "ВКС.АСПУ.2196.СС1")
+        self.assertEqual(len(state["spec"]), 74)
 
     def test_key_command(self):
         import os
@@ -239,3 +264,16 @@ class AssistantUnits(unittest.TestCase):
         self.assertEqual(out["project"], {"code": "X"})
         self.assertEqual(out["spec"], [{"name": "a"}])
         self.assertEqual(out["summary"], "ok")
+
+    def test_merge_per_module(self):
+        from schemgen.assistant import merge
+        cur = {"plc": [{"key": "A1", "channels": [1]}, {"key": "A2", "channels": [2]}],
+               "terminals": [{"name": "X1", "rows": []}, {"name": "X2", "rows": []}],
+               "spec": [{"name": "a"}]}
+        out = merge(cur, {"plc": [{"key": "a2", "channels": [3]}, {"key": "A5"}],
+                          "remove_terminal_blocks": ["X1"],
+                          "terminals": [{"name": "X3", "rows": []}]})
+        self.assertEqual([m["key"] for m in out["plc"]], ["A1", "a2", "A5"])
+        self.assertEqual(out["plc"][1]["channels"], [3])
+        self.assertEqual([b["name"] for b in out["terminals"]], ["X2", "X3"])
+        self.assertEqual(out["spec"], [{"name": "a"}])

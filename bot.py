@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 
 from schemgen import TemplateError, read_document, render_pdf, write_workbook
-from schemgen import assistant
+from schemgen import assistant, preview
 from schemgen.jsonio import check, dict_to_doc, doc_to_dict
 
 ROOT = Path(__file__).resolve().parent
@@ -44,7 +44,11 @@ HELP = (
     "• Excel. /template — пустой шаблон, /example — заполненный пример. "
     "Заполните и пришлите файлом.\n\n"
     "В ответ — PDF и Excel с тем, что я понял (его можно поправить и прислать обратно).\n"
-    "/project — текущий проект в Excel, /new — начать новый проект, "
+    "Каждую правку текстом я сначала показываю картинкой изменённых листов — "
+    "применяю после кнопки «Принять».\n"
+    "/base — новый проект из базового шаблона (дальше правите входы/выходы текстом), "
+    "/savebase — сделать текущий проект базовым.\n"
+    "/project — текущий проект в Excel, /new — начать новый пустой проект, "
     "/key sk-ant-… — задать ключ Claude API."
 )
 
@@ -116,11 +120,44 @@ class Api:
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         return self._send(req, 120)
 
-    def send_message(self, chat_id: int, text: str, reply_to: int | None = None):
-        p = {"chat_id": chat_id, "text": text}
+    def send_message(self, chat_id: int, text: str, reply_to: int | None = None,
+                     keyboard: list | None = None):
+        p = {"chat_id": chat_id, "text": text[:4096]}
         if reply_to:
             p["reply_to_message_id"] = reply_to
+        if keyboard:
+            p["reply_markup"] = {"inline_keyboard": keyboard}
         return self.call("sendMessage", p)
+
+    def _multipart(self, method: str, fields: dict, files: dict):
+        """files: {поле: (имя_файла, bytes)}"""
+        boundary = uuid.uuid4().hex
+        body = bytearray()
+        for k, v in fields.items():
+            body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                     f'name="{k}"\r\n\r\n{v}\r\n').encode()
+        for k, (fname, data) in files.items():
+            body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                     f'name="{k}"; filename="{fname}"\r\n'
+                     "Content-Type: application/octet-stream\r\n\r\n").encode()
+            body += data + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
+        req = urllib.request.Request(
+            f"{self.base}/{method}", data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        return self._send(req, 120)
+
+    def send_photos(self, chat_id: int, images: list[bytes], caption: str = ""):
+        """1 картинка — sendPhoto, 2–10 — альбом."""
+        if len(images) == 1:
+            return self._multipart("sendPhoto", {"chat_id": chat_id, "caption": caption[:1000]},
+                                   {"photo": ("page.jpg", images[0])})
+        media = [{"type": "photo", "media": f"attach://p{i}"} for i in range(len(images))]
+        if caption:
+            media[0]["caption"] = caption[:1000]
+        return self._multipart("sendMediaGroup",
+                               {"chat_id": chat_id, "media": json.dumps(media)},
+                               {f"p{i}": (f"p{i}.jpg", b) for i, b in enumerate(images)})
 
 
 def _ascii_name(name: str) -> str:
@@ -163,11 +200,44 @@ class Bot:
         self._state_path(chat).write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                           encoding="utf-8")
 
+    def _pending_path(self, chat: int) -> Path:
+        return self.state_dir / f"{chat}.pending.json"
+
+    def load_pending(self, chat: int) -> dict | None:
+        p = self._pending_path(chat)
+        if p.is_file():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
+        return None
+
+    def save_pending(self, chat: int, data: dict | None) -> None:
+        p = self._pending_path(chat)
+        if data is None:
+            p.unlink(missing_ok=True)
+            return
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def load_base(self) -> dict:
+        """Базовый проект: data/base.json, иначе — пример 2196."""
+        p = self.state_dir / "base.json"
+        if p.is_file():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
+        return doc_to_dict(read_document(EXAMPLE))
+
     def lock(self, chat: int) -> threading.Lock:
         with self._locks_guard:
             return self._locks.setdefault(chat, threading.Lock())
 
     def handle(self, update: dict) -> None:
+        if "callback_query" in update:
+            self.on_callback(update["callback_query"])
+            return
         msg = update.get("message") or update.get("edited_message")
         if not msg:
             return
@@ -195,8 +265,30 @@ class Bot:
             self.on_key(chat, mid, user, text)
         elif cmd == "/new":
             self.save_state(chat, {})
-            self.api.send_message(chat, "Начинаем новый проект. Опишите его текстом "
-                                        "или пришлите Excel.")
+            self.save_pending(chat, None)
+            self.api.send_message(chat, "Начинаем новый пустой проект. Опишите его текстом "
+                                        "или пришлите Excel. Начать с базового шаблона — /base.")
+        elif cmd == "/base":
+            base = self.load_base()
+            self.save_state(chat, base)
+            self.save_pending(chat, None)
+            d = dict_to_doc(base)
+            self.api.send_message(
+                chat, f"Новый проект создан из базового шаблона ({d.project.code}): "
+                      f"{len(d.spec)} поз. спецификации, {len(d.terminals)} клеммников, "
+                      f"{len(d.plc)} модулей ПЛК.\nТеперь пишите, что поменять: «шифр "
+                      "ВКС.АСПУ.2300.СС1», «вход A5 модуля A1 — датчик уровня», «убери "
+                      "выход B3 модуля A4» … Каждую правку покажу картинкой перед применением.")
+        elif cmd == "/savebase":
+            state = self.load_state(chat)
+            if not state:
+                self.api.send_message(chat, "Проекта нет — нечего сохранять.")
+                return
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            (self.state_dir / "base.json").write_text(
+                json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+            self.api.send_message(chat, "Текущий проект сохранён как базовый шаблон. "
+                                        "Новый проект из него — /base.")
         elif cmd == "/project":
             state = self.load_state(chat)
             if not state:
@@ -272,7 +364,7 @@ class Bot:
             return
         self.api.send_message(chat, "Разбираю описание, это займёт до пары минут…", mid)
         self.api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
-        current = self.load_state(chat)
+        current = self.load_pending(chat) or self.load_state(chat)
         try:
             update = assistant.ask(self.claude_key, current, text, self.claude_model,
                                    self.claude_url)
@@ -281,7 +373,6 @@ class Bot:
             return
         merged = assistant.merge(current, update)
         document = dict_to_doc(merged)
-        self.save_state(chat, doc_to_dict(document))
         lines = [update.get("summary", "").strip()]
         problems = check(document)
         questions = [q for q in update.get("questions") or [] if q]
@@ -290,13 +381,69 @@ class Bot:
         if problems:
             lines.append("Не хватает для PDF:\n" + "\n".join(f"• {p}" for p in problems[:10]))
         if not (document.spec or document.terminals or document.plc):
+            self.save_state(chat, doc_to_dict(document))   # только реквизиты — сразу
             lines.append("Пока нечего рисовать — опишите оборудование подробнее.")
             self.api.send_message(chat, "\n\n".join(x for x in lines if x), mid)
             return
         if not document.project.code:
             document.project.code = "БЕЗ ШИФРА"
-        self.api.send_message(chat, "\n\n".join(x for x in lines if x), mid)
-        self.deliver(chat, mid, document, "")
+        self.propose(chat, mid, dict_to_doc(current) if current else None, document,
+                     "\n\n".join(x for x in lines if x))
+
+    # --- проверка правок картинками -----------------------------------------
+    KEYBOARD = [[{"text": "✅ Принять", "callback_data": "ok"},
+                 {"text": "↩️ Отменить", "callback_data": "undo"}]]
+
+    def propose(self, chat: int, mid: int, old_doc, new_doc, text: str) -> None:
+        """Показать изменённые листы картинками и ждать «Принять»/«Отменить»."""
+        self.save_pending(chat, doc_to_dict(new_doc))
+        try:
+            pages = preview.changed_pages(old_doc, new_doc)
+        except Exception:
+            log.error("Не удалось нарисовать превью:\n%s", traceback.format_exc())
+            pages = []
+        if pages:
+            if len(pages) <= preview.MAX_FULL:
+                imgs = [preview.to_jpeg(p) for p in pages]
+                note = f"Изменилось листов: {len(pages)}."
+            else:
+                imgs = [preview.to_jpeg(preview.contact_sheet(pages[i:i + 9]))
+                        for i in range(0, min(len(pages), 36), 9)]
+                note = (f"Изменилось листов: {len(pages)} — показываю обзором; "
+                        "подробно смотрите PDF после «Принять».")
+            self.api.send_photos(chat, imgs, note)
+        else:
+            text += "\n\nНа листах ничего не поменялось (изменились только данные)."
+        self.api.send_message(chat, (text + "\n\nПроверьте и подтвердите. Можно сразу "
+                                     "написать следующую правку — она ляжет поверх этой.")
+                              .strip(), mid, keyboard=self.KEYBOARD)
+
+    def on_callback(self, cq: dict) -> None:
+        chat = ((cq.get("message") or {}).get("chat") or {}).get("id")
+        user = (cq.get("from") or {}).get("id")
+        try:
+            self.api.call("answerCallbackQuery", {"callback_query_id": cq.get("id")})
+        except Exception:
+            pass
+        if not chat or (self.allowed and user not in self.allowed):
+            return
+        try:  # убрать кнопки с сообщения
+            self.api.call("editMessageReplyMarkup", {
+                "chat_id": chat, "message_id": cq["message"]["message_id"],
+                "reply_markup": {"inline_keyboard": []}})
+        except Exception:
+            pass
+        pending = self.load_pending(chat)
+        if pending is None:
+            self.api.send_message(chat, "Нечего подтверждать — изменений на проверке нет.")
+            return
+        if cq.get("data") == "ok":
+            self.save_state(chat, pending)
+            self.save_pending(chat, None)
+            self.deliver(chat, None, dict_to_doc(pending), "Изменения приняты.")
+        else:
+            self.save_pending(chat, None)
+            self.api.send_message(chat, "Отменил. Проект остался как был.")
 
     def on_document(self, chat: int, mid: int, doc: dict) -> None:
         name = doc.get("file_name") or "file"
@@ -333,6 +480,7 @@ class Bot:
                                             + problems, mid)
                 return
             self.save_state(chat, doc_to_dict(document))
+            self.save_pending(chat, None)
             with tempfile.TemporaryDirectory() as d2:
                 out = Path(d2) / "out.pdf"
                 sheets = render_pdf(document, str(out))
@@ -342,13 +490,31 @@ class Bot:
                     f"клеммников: {len(document.terminals)}, модулей ПЛК: {len(document.plc)}.\n"
                     "Проект запомнил — дальше можно править текстом.", mid)
 
+    RESTART_CODE = 3   # run_bot.bat перезапускает бота с этим кодом выхода
+
+    @staticmethod
+    def _code_stamp() -> float:
+        files = [ROOT / "bot.py", ROOT / "requirements.txt", *(ROOT / "schemgen").rglob("*.py")]
+        return max((f.stat().st_mtime for f in files if f.is_file()), default=0.0)
+
     def run(self) -> None:
         offset = 0
         me = self.api.call("getMe")
         log.info("Бот @%s запущен", me.get("username"))
+        stamp = self._code_stamp()
+        self._active = 0
         while True:
+            # обновились файлы бота — перезапуск, когда ничего не обрабатывается
+            if self._code_stamp() != stamp and self._active == 0 and not self._pending:
+                log.info("Файлы бота обновлены — перезапускаюсь")
+                if offset:
+                    try:  # подтвердить полученные апдейты, чтобы не обработать их дважды
+                        self.api.call("getUpdates", {"offset": offset, "timeout": 0})
+                    except Exception:
+                        pass
+                sys.exit(self.RESTART_CODE)
             try:
-                updates = self.api.call("getUpdates", {"offset": offset, "timeout": 50})
+                updates = self.api.call("getUpdates", {"offset": offset, "timeout": 25})
             except Exception as e:
                 log.warning("getUpdates: %s — повтор через 5 с", e)
                 time.sleep(5)
@@ -356,6 +522,7 @@ class Bot:
             for u in updates:
                 offset = u["update_id"] + 1
                 # каждый апдейт — в своём потоке, но сообщения одного чата по очереди
+                self._active += 1
                 threading.Thread(target=self._safe_handle, args=(u,), daemon=True).start()
 
     TEXT_QUIET = 4.0   # сек тишины, после которых собранный текст уходит в разбор
@@ -390,6 +557,13 @@ class Bot:
                     self._pending.pop(chat)
                     break
         text = "\n".join(buf["parts"])
+        self._active = getattr(self, "_active", 0) + 1
+        try:
+            self._flush_text(chat, buf, text)
+        finally:
+            self._active -= 1
+
+    def _flush_text(self, chat: int, buf: dict, text: str) -> None:
         with self.lock(chat):
             try:
                 self.on_text(chat, buf["mid"], text)
@@ -399,9 +573,18 @@ class Bot:
                                             "см. журнал бота.")
 
     def _safe_handle(self, u: dict) -> None:
+        """Счётчик _active увеличивает run() до запуска потока."""
+        try:
+            self._safe_handle_inner(u)
+        finally:
+            self._active -= 1
+
+    def _safe_handle_inner(self, u: dict) -> None:
         if self._buffer_text(u):
             return
-        chat = ((u.get("message") or u.get("edited_message") or {}).get("chat") or {}).get("id")
+        msg = u.get("message") or u.get("edited_message") or \
+            (u.get("callback_query") or {}).get("message") or {}
+        chat = (msg.get("chat") or {}).get("id")
         with self.lock(chat or 0):
             try:
                 self.handle(u)
