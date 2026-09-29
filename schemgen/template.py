@@ -49,6 +49,11 @@ def active(doc, frozen: list[Frozen]) -> list[Frozen]:
     """Шаблонные листы, данные которых не менялись (и файл образца на месте)."""
     if not frozen:
         return []
+    try:
+        import pikepdf  # noqa: F401  — без него подложить образец нельзя
+    except ImportError:
+        log.warning("pikepdf не установлен — листы-шаблоны рисует генератор")
+        return []
     from .jsonio import doc_to_dict
     d = doc_to_dict(doc)
     out = []
