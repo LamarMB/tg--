@@ -193,6 +193,7 @@ def read_document(path: str | Path) -> Document:
     from .e3.excel import read_feeders, read_mains, read_plc, read_power24
     plc = read_plc(wb, _sheet, _table, problems)
     mains = read_mains(wb, _sheet, _table, problems)
+    frozen = _read_frozen(wb)
     p24 = read_power24(wb, _sheet, _table, problems)
     feeders = read_feeders(wb, _sheet, _table, problems)
 
@@ -201,7 +202,27 @@ def read_document(path: str | Path) -> Document:
         problems.append("В файле нет ни строк спецификации, ни клемм, ни каналов ПЛК.")
     if problems:
         raise TemplateError(problems)
-    return Document(project, spec, blocks, plc, p24, feeders, mains)
+    return Document(project, spec, blocks, plc, p24, feeders, mains, frozen)
+
+
+FROZEN_COLS = ["Лист схемы", "Страница образца", "Файл образца", "Разделы", "Отпечаток"]
+
+
+def _read_frozen(wb) -> list:
+    """Служебный лист «Шаблон»: какие листы Э3 берутся из PDF-образца."""
+    from .template import Frozen
+    if "Шаблон" not in wb.sheetnames:
+        return []
+    out = []
+    for row in wb["Шаблон"].iter_rows(min_row=2, values_only=True):
+        if not row or row[0] in (None, ""):
+            continue
+        try:
+            keys = [k.strip() for k in str(row[3] or "").split(",") if k.strip()]
+            out.append(Frozen(int(row[0]), int(row[1]), str(row[2]), keys, str(row[4] or "")))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
 
 
 # ---------------------------------------------------------------------- запись
@@ -259,6 +280,12 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
     write_power24(wb, doc.power24 if doc else None, _header)
     write_feeders(wb, doc.feeders if doc else [], _header)
     write_mains(wb, doc.mains if doc else None, _header)
+    if doc and doc.frozen:
+        ws = wb.create_sheet("Шаблон")
+        _header(ws, FROZEN_COLS, [10, 12, 20, 30, 36])
+        for f in doc.frozen:
+            ws.append([f.sheet, f.page, f.pdf, ", ".join(f.keys), f.hash])
+        ws.sheet_state = "hidden"
     _help_sheet(wb.create_sheet("Инструкция"))
     wb.save(path)
 

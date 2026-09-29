@@ -21,7 +21,13 @@ def doc_to_dict(doc: Document) -> dict:
         "power24": _p24_to_dict(doc.power24),
         "feeders": [asdict(f) for f in doc.feeders or []],
         "mains": _mains_to_dict(doc.mains),
+        "frozen": _frozen_to_list(doc.frozen),
     }
+
+
+def _frozen_to_list(fr):
+    from .template import to_list
+    return to_list(fr)
 
 
 def _mains_to_dict(m) -> dict | None:
@@ -234,7 +240,13 @@ def dict_to_doc(d: dict) -> Document:
         if mod.tag and mod.channels:
             plc.append(mod)
     return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
-                    _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")))
+                    _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")),
+                    _frozen_from(d.get("frozen")))
+
+
+def _frozen_from(items):
+    from .template import from_list
+    return from_list(items)
 
 
 def _dict_to_feeders(items):

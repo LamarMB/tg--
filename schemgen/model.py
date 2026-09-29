@@ -86,3 +86,4 @@ class Document:
     power24: object = None                        # e3.power24.Power24
     feeders: list = field(default_factory=list)   # list[e3.power230.Feeder]
     mains: object = None                          # e3.mains.Mains
+    frozen: list = field(default_factory=list)    # template.Frozen — листы из образца

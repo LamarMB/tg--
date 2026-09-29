@@ -526,6 +526,8 @@ def merge(current: dict, update: dict) -> dict:
     """Применяет правку: project — по полям, spec — целиком, клеммники и модули
     ПЛК — поштучно (по имени / key), удаление — явными списками."""
     out = {k: current.get(k) for k in SECTIONS}
+    if current.get("frozen"):
+        out["frozen"] = current["frozen"]             # листы-шаблоны образца — как были
     if update.get("project"):
         pr = dict(out.get("project") or {})
         pr.update({k: v for k, v in update["project"].items() if v is not None})

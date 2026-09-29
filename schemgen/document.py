@@ -1,6 +1,7 @@
 """Сборка PDF из модели."""
 from __future__ import annotations
 
+from . import template
 from .e3 import io_sheets, mains, power24, power230
 from .frame import draw_frame
 from .model import Document
@@ -18,6 +19,9 @@ def _emit(pen: Pen, pr, code: str, name: str, pages, numbers=None,
           sheets_total=None) -> int:
     numbers = numbers or list(range(1, len(pages) + 1))
     for n, draw in zip(numbers, pages):
+        if hasattr(draw, "pre"):                 # лист-шаблон: закрасить надписи образца
+            draw.pre(pen)
+            pen.templates.append((pen.page_no - 1, draw.template))
         draw_frame(pen, pr, code, n, sheets_total or len(pages), name, first=(n == 1))
         draw(pen)
         pen.new_page()
@@ -31,6 +35,8 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
     метки: (страница PDF, вид, номер)."""
     pr = doc.project
     pen = Pen(path, marks)
+    pen.templates = []                  # (индекс страницы, Frozen)
+    frozen = template.active(doc, doc.frozen)
     total = 0
 
     # Документ В4: титул + спецификация + клеммный план
@@ -45,7 +51,7 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
     # Документ Э3: титул + силовые листы + питание 24 В + листы ПЛК.
     # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
     # чтобы ссылки между листами разных типов подставлялись сами.
-    if doc.plc or doc.power24 or doc.feeders or doc.mains:
+    if doc.plc or doc.power24 or doc.feeders or doc.mains or frozen:
         xr = io_sheets.XRef()
         numbers, pages = [1], [title_page(pr)]
         nxt = 2
@@ -74,15 +80,20 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
         if io_pages:
             io_sheets.register(io_pages, start(pr.e3_first_io_sheet), xr)
             plan += [(pg.number, io_sheets.painter(pg, xr)) for pg in io_pages]
-        for n, draw in plan:
+        # листы-шаблоны образца заменяют сгенерированные с тем же номером
+        by_num = dict(plan)
+        for f in frozen:
+            by_num[f.sheet] = template.painter(f)
+        for n in sorted(by_num):
             numbers.append(n)
-            pages.append(draw)
+            pages.append(by_num[n])
         total += _emit(pen, pr, _code(pr, pr.e3_doc_suffix), pr.e3_doc_name, pages,
-                       numbers, sheets_total=numbers[-1])
+                       numbers, sheets_total=len(numbers))
 
     pen.c.setTitle(f"{pr.code} {pr.line}".strip())
     pen.c.setAuthor(pr.contractor)
     pen.save()
+    template.underlay(path, pen.templates)
     if hits is not None:
         hits.extend(pen.hits)
     return total
