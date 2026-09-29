@@ -18,10 +18,20 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
 Пользователь описывает проект шкафа свободным текстом (часто кратко, с жаргоном).
 Твоя задача — перевести описание в структуру проекта и вызвать инструмент save_project.
 
+ГЛАВНОЕ ПРАВИЛО: в проект попадает ТОЛЬКО то, что есть в тексте пользователя.
+Никогда не придумывай оборудование, модули, каналы, реле, кнопки, лампы, клеммники,
+клеммы и позиции спецификации, которых нет в тексте. Не подставляй «типовую» или
+«примерную» схему. Если в сообщении только реквизиты — заполни только project,
+остальные разделы не присылай и спроси в questions, какое оборудование в шкафу.
+Лучше меньше, но точно.
+
 ПРАВИЛА
 1. Не выдумывай то, чего пользователь не говорил: артикулы, производителей, номера
    листов, фамилии. Оставляй такие поля пустыми и перечисли главное недостающее в
    questions (коротко, не больше 6 пунктов).
+1а. Переноси ВСЕ перечисленные пользователем позиции, клеммы и каналы полностью и
+   дословно (наименование, артикул, количество, производитель) — не сокращай, не
+   объединяй и не пропускай, даже если их сотни.
 2. Очевидное достраивай сам: позиционные обозначения по ГОСТ (QF — автоматы, K —
    реле, SB — кнопки, HL — лампы/колонны, XT/X — клеммники, A — модули), маркировку
    проводов по образцу «A1-DI0», «CPU-Q0» (цвет WH/BK, сечение 0,5 для сигналов, если
@@ -72,7 +82,7 @@ TOOL = {
             "summary": _str("1–3 предложения: что понял и что изменил"),
             "questions": {"type": "array", "items": {"type": "string"},
                           "description": "что уточнить у пользователя (до 6 пунктов)"},
-            "project": {"type": "object", "properties": {
+            "project": {"type": "object", "additionalProperties": False, "properties": {
                 "code": _str("шифр без суффикса документа, напр. ВКС.АСПУ.2196.СС1"),
                 "system_name": _str("наименование системы на титуле, напр. "
                                     "«Автоматизированная система поштучного учета»; "
@@ -145,17 +155,51 @@ class AssistantError(Exception):
     pass
 
 
-def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
-        url: str = API_URL, timeout: float = 600) -> dict:
-    """Возвращает ответ инструмента save_project (dict)."""
-    user = ("Текущий проект (JSON):\n" + json.dumps(current, ensure_ascii=False,
-                                                    separators=(",", ":"))
-            + "\n\nСообщение пользователя:\n" + message)
+# Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
+# помещается в один ответ модели.
+GROUPS = [("project", "spec"), ("terminals",), ("plc",)]
+GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
+               "terminals": "клеммники", "plc": "модули ПЛК и каналы"}
+
+
+def _tool_for(sections) -> dict:
+    props = TOOL["input_schema"]["properties"]
+    keep = ["summary", "questions", *sections]
+    return {"name": "save_project", "description": TOOL["description"],
+            "input_schema": {"type": "object", "required": ["summary"],
+                             "properties": {k: props[k] for k in keep}}}
+
+
+def _unwrap(out: dict) -> dict:
+    """Модель иногда вкладывает разделы внутрь project: {"project": {"project": …,
+    "spec": […]}}. Поднимаем их на верхний уровень."""
+    pr = out.get("project")
+    if isinstance(pr, dict) and any(k in pr for k in SECTIONS + ("summary", "questions")):
+        out = dict(out)
+        inner = pr
+        out["project"] = inner.get("project") if isinstance(inner.get("project"), dict) else {
+            k: v for k, v in inner.items() if k not in SECTIONS + ("summary", "questions")}
+        for k in ("spec", "terminals", "plc", "summary", "questions"):
+            if k in inner and not out.get(k):
+                out[k] = inner[k]
+    return out
+
+
+def _call(api_key, current, message, sections, model, url, timeout) -> dict:
+    names = ", ".join(GROUP_NAMES[s] for s in sections)
+    ctx = {k: current.get(k) for k in ("project", *sections) if current.get(k)}
+    user = ("Текущий проект (JSON, только нужные разделы):\n"
+            + json.dumps(ctx, ensure_ascii=False, separators=(",", ":"))
+            + "\n\nСообщение пользователя:\n" + message
+            + f"\n\nВ ЭТОМ запросе обрабатывай только: {names}. Другие разделы "
+              "разбираются отдельно — не упоминай их ни в summary, ни в questions. "
+              "Если в сообщении нет ничего для этих разделов — не присылай их, "
+              "summary оставь пустым.")
     body = {
         "model": model,
         "max_tokens": 32000,
         "system": SYSTEM,
-        "tools": [TOOL],
+        "tools": [_tool_for(sections)],
         "tool_choice": {"type": "tool", "name": "save_project"},
         "messages": [{"role": "user", "content": user}],
     }
@@ -174,13 +218,36 @@ def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
     except urllib.error.URLError as e:
         raise AssistantError(f"Нет связи с api.anthropic.com: {e.reason}. "
                              "Из России нужен VPN.") from e
+    if res.get("stop_reason") == "max_tokens":
+        raise AssistantError(f"Раздел «{names}» получился слишком большим для одного "
+                             "ответа модели — пришлите описание этого раздела частями.")
     for block in res.get("content", []):
         if block.get("type") == "tool_use" and block.get("name") == "save_project":
-            return block.get("input") or {}
-    if res.get("stop_reason") == "max_tokens":
-        raise AssistantError("Описание слишком большое для одного сообщения — "
-                             "пришлите его частями.")
+            out = _unwrap(block.get("input") or {})
+            return {k: v for k, v in out.items() if k in ("summary", "questions", *sections)}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
+
+
+def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
+        url: str = API_URL, timeout: float = 600) -> dict:
+    """Разбирает сообщение; возвращает изменённые разделы + summary/questions."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(len(GROUPS)) as ex:
+        futs = [ex.submit(_call, api_key, current, message, g, model, url, timeout)
+                for g in GROUPS]
+        parts = [f.result() for f in futs]      # первая ошибка пробрасывается
+    result: dict = {"summary": "", "questions": []}
+    for part in parts:
+        for k, v in part.items():
+            if k == "summary":
+                if v and v.strip():
+                    result["summary"] = (result["summary"] + " " + v.strip()).strip()
+            elif k == "questions":
+                result["questions"] += [q for q in v or [] if q and q not in result["questions"]]
+            else:
+                result[k] = v
+    result["questions"] = result["questions"][:8]
+    return result
 
 
 def merge(current: dict, update: dict) -> dict:

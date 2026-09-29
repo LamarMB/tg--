@@ -229,3 +229,13 @@ class Schematic(unittest.TestCase):
             with self.assertRaises(TemplateError) as e:
                 read_document(p)
             self.assertIn("неизвестный элемент", e.exception.problems[0])
+
+
+class AssistantUnits(unittest.TestCase):
+    def test_unwrap_nested_sections(self):
+        from schemgen.assistant import _unwrap
+        out = _unwrap({"project": {"project": {"code": "X"}, "spec": [{"name": "a"}],
+                                   "summary": "ok"}})
+        self.assertEqual(out["project"], {"code": "X"})
+        self.assertEqual(out["spec"], [{"name": "a"}])
+        self.assertEqual(out["summary"], "ok")

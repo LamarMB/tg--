@@ -142,6 +142,7 @@ class Bot:
         self.claude_url = claude_url
         self.state_dir = state_dir
         self._locks: dict[int, threading.Lock] = {}
+        self._pending: dict[int, dict] = {}
         self._locks_guard = threading.Lock()
 
     # --- состояние проекта чата -------------------------------------------
@@ -299,9 +300,19 @@ class Bot:
 
     def on_document(self, chat: int, mid: int, doc: dict) -> None:
         name = doc.get("file_name") or "file"
+        if name.lower().endswith((".txt", ".md")):
+            raw = self.api.download(doc["file_id"])
+            for enc in ("utf-8-sig", "cp1251"):
+                try:
+                    text = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            self.on_text(chat, mid, text)
+            return
         if not name.lower().endswith((".xlsx", ".xlsm")):
-            self.api.send_message(chat, "Нужен файл Excel (.xlsx). "
-                                        "Шаблон — командой /template.", mid)
+            self.api.send_message(chat, "Пришлите Excel (.xlsx) или описание текстом / "
+                                        "файлом .txt. Шаблон Excel — /template.", mid)
             return
         if doc.get("file_size", 0) > 20 * 1024 * 1024:
             self.api.send_message(chat, "Файл больше 20 МБ — Telegram не даст "
@@ -347,7 +358,49 @@ class Bot:
                 # каждый апдейт — в своём потоке, но сообщения одного чата по очереди
                 threading.Thread(target=self._safe_handle, args=(u,), daemon=True).start()
 
+    TEXT_QUIET = 4.0   # сек тишины, после которых собранный текст уходит в разбор
+
+    def _buffer_text(self, u: dict) -> bool:
+        """Обычный текст копим: Telegram делит длинное сообщение на части по 4096
+        символов. Разбираем, когда части перестали приходить."""
+        msg = u.get("message") or {}
+        text = (msg.get("text") or "").strip()
+        if not text or text.startswith("/") or "chat" not in msg:
+            return False
+        user = (msg.get("from") or {}).get("id")
+        if self.allowed and user not in self.allowed:
+            return False
+        chat = msg["chat"]["id"]
+        with self._locks_guard:
+            buf = self._pending.get(chat)
+            if buf is None:
+                buf = self._pending[chat] = {"parts": [], "mid": msg.get("message_id"),
+                                             "last": 0.0}
+                threading.Thread(target=self._flush_later, args=(chat,), daemon=True).start()
+            buf["parts"].append(text)
+            buf["last"] = time.monotonic()
+        return True
+
+    def _flush_later(self, chat: int) -> None:
+        while True:
+            time.sleep(0.5)
+            with self._locks_guard:
+                buf = self._pending.get(chat)
+                if buf and time.monotonic() - buf["last"] >= self.TEXT_QUIET:
+                    self._pending.pop(chat)
+                    break
+        text = "\n".join(buf["parts"])
+        with self.lock(chat):
+            try:
+                self.on_text(chat, buf["mid"], text)
+            except Exception:
+                log.error("Ошибка обработки:\n%s", traceback.format_exc())
+                self.api.send_message(chat, "Внутренняя ошибка при обработке, "
+                                            "см. журнал бота.")
+
     def _safe_handle(self, u: dict) -> None:
+        if self._buffer_text(u):
+            return
         chat = ((u.get("message") or u.get("edited_message") or {}).get("chat") or {}).get("id")
         with self.lock(chat or 0):
             try:
