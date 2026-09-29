@@ -101,17 +101,24 @@ def _letter(pin: str) -> str:
     return m.group(0).upper() if m else ""
 
 
+_CONTACTS = ("ттр", "перекл", "кнопка но", "кнопка нз")
+
+
 def _place(chs: list[PlcChannel], start: float, max_step: float, right: float,
            group_gap: float) -> list[_Pos]:
-    """Равномерно раскладывает выводы, с доп. зазором между группами (A/B)."""
+    """Равномерно раскладывает выводы; перед первым контактом реле/кнопки
+    (после простых входов) — доп. зазор, как в образце."""
     n = len(chs)
     if n == 0:
         return []
-    groups = sum(1 for i in range(1, n) if _letter(chs[i].pin) != _letter(chs[i - 1].pin))
+    gap_at = next((i for i, c in enumerate(chs) if c.element in _CONTACTS), None)
+    if not gap_at:
+        gap_at = None
+    groups = 1 if (gap_at and group_gap) else 0
     step = max_step if n == 1 else min(max_step, (right - start - groups * group_gap) / (n - 1))
     out, x = [], start
     for i, ch in enumerate(chs):
-        if i and _letter(ch.pin) != _letter(chs[i - 1].pin):
+        if i and i == gap_at:
             x += group_gap
         out.append(_Pos(ch, x))
         x += step
@@ -238,7 +245,7 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
         p.text(x, top + 36.1, ch.pin, S.PIN, "center")
         step = 56.7 if pos in b.regular else 34.0
         p.anchor(f"{m.tag}:{ch.pin}", x - step / 2 + 3, top + 28.0, x + step / 2 - 3, top + 80.0)
-        S.centered_lines(p, x, top + 45.3, ch.desc, step - 4)
+        S.centered_lines(p, x, top + 45.3 + (0 if pos in b.regular else 4.3), ch.desc, step - 1)
         wired = bool(_wire_lines(ch) or ch.element or ch.link)
         if not wired:
             continue
@@ -253,7 +260,6 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
             S.arrow_right(p, tip, yy, lk + (f"/{rf.lstrip('/')}" if rf else ""))
         elif el in (CONTACT_SSR, CONTACT_CO):
             relay_x.append(x)
-            p.vline(x, bus_y, bus_y + 11.3, S.LW_BUS)
             p.vline(x, bus_y + 11.3, 473.5, S.LW)
             ref = xr.head_ref(ch.device) or ch.ref
             if el == CONTACT_SSR:
@@ -266,7 +272,7 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
             button_x.append(x)
             S.wire(p, x, feed_y, 399.8)
             ref = xr.head_ref(ch.device) or ch.ref
-            S.button(p, x, 403.0, ch.device, ref, el == BUTTON_NC)
+            S.button(p, x, 404.0, ch.device, ref, el == BUTTON_NC)
             S.wire(p, x, 416.8, pin_y)
             if m.feed_wire:
                 S.wire_mark(p, x, 388.5, m.feed_wire)
@@ -276,17 +282,19 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
         if _wire_lines(ch):
             S.wire_mark(p, x, mark_y, _wire_lines(ch))
 
-    # питание контактов: стрелка слева, горизонталь, спуск к шине
+    # питание контактов: стрелка слева, горизонталь с отводами, спуск к шине реле
     if relay_x or button_x:
-        drops = sorted(relay_x[:1] + button_x)
-        first = drops[0]
+        taps = sorted(relay_x[:1] + button_x)
+        first = taps[0]
         tip = first - 17.0
-        right = max(drops)
-        if m.feed_next:
-            right = max(right, (max(relay_x) if relay_x else right)) + 40.0
+        right = first + 43.2 if m.feed_next else max(taps)
+        right = max(right, max(taps))
         if m.feed:
             S.arrow_in_from_left(p, tip, feed_y, m.feed)
-        p.hline(tip, right if m.feed_next else max(drops), feed_y, S.LW)
+        p.hline(tip, right, feed_y, S.LW)
+        for x in taps:
+            if x < right:                          # отвод с продолжением линии
+                S.junction(p, x, feed_y)
         if m.feed_next:
             S.arrow_right(p, right + 7.8, feed_y, m.feed_next)
         if relay_x:
@@ -295,7 +303,7 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
             if m.feed_wire:
                 S.wire_mark(p, x, 388.5, m.feed_wire)
             if len(relay_x) > 1:
-                S.bus(p, x, max(relay_x), bus_y, x + 11.3)
+                S.drop_bus(p, relay_x, bus_y)
 
 
 def _desc_rows(b: _Block, width_reg: float, width_spec: float) -> int:
@@ -320,17 +328,22 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
     S.tag(p, b.x0 - 10.1, top - 1.8, f"-{m.tag}", m.ref)
 
     wire_top = bottom - 11.4
-    mark_y = bottom + 45.3
-    coil_y = bottom + 73.7
-    bus_y = bottom + 113.4
-    ret_y = bottom + 147.4
+    mark_y = bottom + 33.9
+    coil_y = bottom + 62.3
+    bus_y = bottom + 102.0
+    ret_y = bottom + 136.0
     heads: list[float] = []
 
     for pos in b.regular + b.special:
         ch, x = pos.ch, pos.x
         S.pin_top(p, x, bottom)
         p.text(x, bottom - 29.7, ch.pin, S.PIN, "center")
-        S.centered_lines(p, x, top + 68.2, ch.desc, 86.0 if pos in b.regular else 60.0)
+        # подписи: при 4+ строках блок выше; одиночная подпись справа — по центру
+        dy = top + 68.2 - max(0, rows - 3) * 3.6
+        if pos not in b.regular and rows > 3:
+            n_own = len(S.desc_lines(ch.desc, 60.0)[0])
+            dy += (rows - n_own) * 9.2 / 2
+        S.centered_lines(p, x, dy, ch.desc, 86.0 if pos in b.regular else 60.0)
         hw = (86.0 if pos in b.regular else 60.0) / 2
         p.anchor(f"{m.tag}:{ch.pin}", x - hw + 2, top + 60.0, x + hw - 2, bottom - 24.0)
         el = ch.element
@@ -340,7 +353,7 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
         if el in (SUPPLY, COMMON):
             yy = bottom + 56.6
             S.wire(p, x, wire_top, yy)
-            tip = x + 26.0
+            tip = x + (17.0 if el == SUPPLY else 26.0)
             p.hline(x, tip if el == SUPPLY else tip - 7.8, yy, S.LW)
             lk, rf = split_link(ch.link, ch.ref, xr)
             text = lk + (f"/{rf.lstrip('/')}" if rf else "")
@@ -370,17 +383,18 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
             S.wire(p, x, wire_top, y_tip)
             S.arrow_down_out(p, x, y_tip, *split_link(ch.link, ch.ref, xr))
         if _wire_lines(ch):
-            S.wire_mark(p, x, mark_y, _wire_lines(ch))
+            S.wire_mark(p, x, mark_y if el in (COIL, LAMP, COMMON) else bottom + 45.3,
+                        _wire_lines(ch))
 
     if heads:
         first = heads[0]
         if len(heads) > 1:
-            S.bus(p, first, max(heads), bus_y, first + 22.7)
+            S.drop_bus(p, sorted(heads), bus_y, up=True)
         # общий провод катушек: от шины вниз и влево к стрелке
         p.vline(first, bus_y, ret_y, S.LW)
         tip = b.x0 + 5.6
         p.hline(tip, first, ret_y, S.LW)
         if m.common_wire:
-            S.hwire_mark(p, tip + 14.0, ret_y, m.common_wire)
+            S.hwire_mark(p, tip + 5.7, ret_y, m.common_wire)
         if m.common:
             S.arrow_in_from_left(p, tip, ret_y, m.common)

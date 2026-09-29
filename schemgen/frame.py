@@ -60,7 +60,7 @@ def _side_column(p: Pen) -> None:
     p.vline(xb, marks[0], marks[-1])
     for y in marks:
         p.hline(xa, xc, y)
-    size = 9.2
+    size = 10.6
     for (y0, y1), t in zip(zip(marks, marks[1:]), titles):
         w = text_width(t, size)
         p.text((xa + xb) / 2 + size * 0.36, (y0 + y1) / 2 + w / 2, t, size,
@@ -180,4 +180,5 @@ def _form1(p: Pen, pr: Project, doc_code: str, sheets_total: int,
 
 def _below_frame(p: Pen, x_copy: float, x_fmt: float) -> None:
     p.text(x_copy, 839.2, "Копировал", 10.6)
-    p.text(x_fmt, 839.2, "Формат А3", 10.6)
+    p.text(x_fmt, 839.2, "Формат", 10.6)
+    p.text(x_fmt + (40.3 if x_fmt < 1060 else 43.6), 839.2, "А3", 10.6)

@@ -14,8 +14,8 @@ BOTTOM_LIMIT = 762.0      # ниже — основная надпись
 SIZE = 8.5
 LINE = 10.2
 
-NAME_X, NAME_W = 323.1, 345.0          # текст наименования
-ART_RIGHT, ART_W = 799.4, 118.0        # артикул прижат вправо
+NAME_X, NAME_W = 323.1, 362.0          # текст наименования
+ART_RIGHT, ART_W = 799.4, 105.0        # артикул прижат вправо
 DES_W = COLS[2] - COLS[1] - 10
 MFR_W = COLS[5] - COLS[4] - 10
 NOTE_W = COLS[6] - COLS[5] - 10
@@ -82,9 +82,9 @@ def _painter(rows: list[_Row]):
         # шапка
         x0, x1 = COLS[0], COLS[-1]
         p.rect(x0, HEAD_Y0, x1, HEAD_Y1)
-        for a, b, h in zip(COLS, COLS[1:], HEADERS):
+        for a, b, h, dx in zip(COLS, COLS[1:], HEADERS, (0, 5.5, 5.5, 0, 0, -5.7)):
             p.vline(a, HEAD_Y0, HEAD_Y1)
-            p.text_in_box(a, HEAD_Y0, b, HEAD_Y1, h, 10.6)
+            p.text_in_box(a + 2 * dx, HEAD_Y0, b, HEAD_Y1, h, 10.6)
         y = HEAD_Y1
         for r in rows:
             y2 = y + r.height

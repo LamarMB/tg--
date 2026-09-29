@@ -16,11 +16,12 @@ STRIP_X0, STRIP_X1 = 978.0, 1148.0          # полоса с метками к�
 LABEL_CX = (STRIP_X0 + STRIP_X1) / 2
 TIER_X = {0: 989.3, 1: 995.0, 2: 1000.6}     # риска / перемычка по ярусу
 
+HEAD_DX = [0, 0, 0, 5.5, 5.6, 7.7]           # сдвиг заголовков как в образце
 TOP = 71.0
 ROW_H = 22.68
 FOOT_H = 14.2
 GAP = 11.3
-BOTTOM_LIMIT = 778.0
+BOTTOM_LIMIT = 775.0          # низ последней строки (как в образце)
 
 
 def terminal_pages(blocks: list[TerminalBlock]):
@@ -36,7 +37,8 @@ def terminal_pages(blocks: list[TerminalBlock]):
             avail = BOTTOM_LIMIT - y - ROW_H
             n = 0
             while i + n < len(rows):
-                need = (n + 1) * ROW_H + (FOOT_H if i + n == len(rows) - 1 else 0)
+                # у последней строки блока под ней ещё итог и отступ (так разбит образец)
+                need = (n + 1) * ROW_H + (FOOT_H + GAP if i + n == len(rows) - 1 else 0)
                 if need > avail:
                     break
                 n += 1
@@ -61,7 +63,7 @@ def terminal_pages(blocks: list[TerminalBlock]):
 
 def _painter(frags):
     def draw(p: Pen) -> None:
-        p.text(564.0, 58.0, "Клеммный план", 25.5, "center")
+        p.text(564.0, 54.8, "Клеммный план", 25.5, "center")
         for blk, rows, a, b, last, y in frags:
             _fragment(p, blk, rows, a, b, last, y)
     return draw
@@ -72,9 +74,9 @@ def _fragment(p: Pen, blk: TerminalBlock, rows, a: int, b: int, last: bool,
     x0, x1 = COLS[0], COLS[-1]
     # шапка таблицы
     p.rect(x0, y, x1, y + ROW_H, lw=0.71)
-    for c0, c1, h in zip(COLS, COLS[1:], HEADERS):
+    for c0, c1, h, dx in zip(COLS, COLS[1:], HEADERS, HEAD_DX):
         p.vline(c0, y, y + ROW_H, 0.37)
-        p.text_in_box(c0, y, c1, y + ROW_H, h, 10.6)
+        p.text_in_box(c0 + 2 * dx, y, c1, y + ROW_H, h, 10.6)
     # заголовок клеммника справа
     p.rect(1029.0, y, 1081.4, y + 2.8, stroke=False, fill=True)
     p.rect(1029.0, y + 19.8, 1082.8, y + ROW_H, stroke=False, fill=True)

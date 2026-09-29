@@ -22,7 +22,7 @@ def wire_mark(p: Pen, x, y, lines: list[str]):
     """Засечка на проводе и маркировка (марка / цвет / сечение) справа."""
     p.line(x - 2.8, y - 2.8, x + 2.8, y + 2.8, LW)
     lines = [s for s in lines if s]
-    top = y - 16.4 - (len(lines) - 3) * 6.7 if lines else y
+    top = y - 19.4 - (len(lines) - 3) * 6.7 if lines else y
     for i, s in enumerate(lines):
         p.text(x + 4.3, top + i * 6.7 + 4.6, s, SMALL)
 
@@ -32,7 +32,7 @@ def hwire_mark(p: Pen, x, y, lines: list[str]):
     p.line(x - 2.8, y + 2.8, x + 2.8, y - 2.8, LW)
     lines = [s for s in lines if s]
     for i, s in enumerate(lines):
-        p.text(x - 2.8, y - 6.0 - (len(lines) - 1 - i) * 6.7, s, SMALL)
+        p.text(x + 4.3, y - 1.4 - (len(lines) - 1 - i) * 6.7, s, SMALL)
 
 
 def _tri(p: Pen, pts):
@@ -65,14 +65,23 @@ def arrow_down_out(p: Pen, x, y_top, label: str, ref: str):
         p.text(x, y_top + 30.2, ref, PIN, "center")
 
 
+def link_text(text: str) -> str:
+    """«-XM1:M5/4.8» → «-XM1:M5 / 4.8» (как в образце)."""
+    import re
+    t = str(text or "")
+    return re.sub(r"(?<=\S)\s*/\s*(?=\S)", " / ", t) if not t.startswith("/") else t
+
+
 def arrow_right(p: Pen, x_tip, y, text: str):
     """Стрелка вправо (провод уходит), текст справа от острия."""
+    text = link_text(text)
     _tri(p, [(x_tip - 7.8, y - 2.8), (x_tip - 7.8, y + 2.8), (x_tip, y)])
     p.text(x_tip + 2.9, y + 2.8, text, PIN)
 
 
 def arrow_in_from_left(p: Pen, x_tip, y, text: str, size=8.5):
     """Стрелка слева (провод приходит): текст — слева от стрелки."""
+    text = link_text(text)
     _tri(p, [(x_tip - 7.8, y - 2.8), (x_tip - 7.8, y + 2.8), (x_tip, y)])
     p.hline(x_tip - 11.3, x_tip - 7.8, y, LW)
     p.text(x_tip - 12.5, y + 3.0, text, size, "right")
@@ -80,6 +89,7 @@ def arrow_in_from_left(p: Pen, x_tip, y, text: str, size=8.5):
 
 def arrow_in_from_right(p: Pen, x_tip, y, text: str):
     """Стрелка справа, острием влево (провод приходит справа)."""
+    text = link_text(text)
     _tri(p, [(x_tip + 7.8, y - 2.8), (x_tip + 7.8, y + 2.8), (x_tip, y)])
     p.hline(x_tip + 7.8, x_tip + 11.3, y, LW)
     p.text(x_tip + 13.0, y + 2.8, text, PIN)
@@ -125,23 +135,25 @@ def _arc_down(p: Pen, x, y):
     p.c.arc(x - 2.85, PAGE_H - y - 2.85, x + 2.85, PAGE_H - y + 2.85, 180, 180)
 
 
-def tag(p: Pen, x_right, y_top, name: str, ref: str = "", size=TAG):
+def tag(p: Pen, x_right, y_top, name: str, ref: str = "", size=TAG, ref_dy=12.2):
     p.text(x_right, y_top + size * 0.85, name, size, "right")
     if ref:
-        p.text(x_right, y_top + size * 0.85 + 12.2, ref, PIN, "right")
+        p.text(x_right, y_top + size * 0.85 + ref_dy, ref, PIN, "right")
 
 
 # --- контакты (провод идёт сверху вниз, y0 — верх символа) -----------------
 def contact_ssr(p: Pen, x, y0, name, ref):
-    """НО контакт твердотельного реле (13+ / 14), высота 11.3."""
-    p.vline(x, y0 + 1.4, y0 + 9.9, LW)
-    p.line(x, y0, x + 5.7, y0 + 4.2, LW)
-    p.line(x, y0 + 7.1, x + 5.7, y0 + 11.3, LW)
-    _tri(p, [(x + 1.7, y0 + 0.1), (x + 3.1, y0 + 2.9), (x + 4.8, y0 + 2.4)])
-    p.hline(x - 2.8, x, y0 + 5.7, LW)
+    """НО контакт твердотельного реле (13+ / 14), высота 11.3. x — провод,
+    сам контакт левее провода (как в образце)."""
+    b = x - 5.7
+    p.vline(b, y0 + 1.4, y0 + 9.9, LW)
+    p.line(x, y0, b, y0 + 4.2, LW)
+    p.line(b, y0 + 7.1, x, y0 + 11.3, LW)
+    _tri(p, [(b + 1.7, y0 + 0.1), (b + 3.1, y0 + 2.9), (b + 4.8, y0 + 2.4)])
+    p.hline(b - 2.8, b, y0 + 5.7, LW)
     p.text(x + 1.4, y0 - 3.5, "13+", PIN)
     p.text(x + 1.4, y0 + 22.7, "14", PIN)
-    tag(p, x - 8.5, y0 - 5.2, name, ref)
+    tag(p, x - 14.2, y0 + 0.7, name, ref, ref_dy=10.0)
 
 
 def contact_changeover(p: Pen, x, y0, name, ref):
@@ -152,30 +164,37 @@ def contact_changeover(p: Pen, x, y0, name, ref):
     p.text(x + 1.4, y0 - 2.4, "11", PIN)
     p.text(x + 1.4, y0 + 21.5, "14", PIN)
     p.text(x + 12.0, y0 + 21.5, "12", PIN)
-    tag(p, x - 8.5, y0 - 5.2, name, ref)
+    tag(p, x - 7.1, y0 - 0.1, name, ref, ref_dy=7.1)
 
 
 def button(p: Pen, x, y0, name, ref, nc: bool):
-    """Кнопка НО (13/14) или НЗ (11/12) с толкателем."""
+    """Кнопка НО (13/14) или НЗ (11/12) с толкателем (геометрия образца).
+    x — провод, y0 — верх контакта."""
+    p.vline(x, y0 - 4.2, y0 + 1.5, LW)
     if nc:
         p.line(x, y0 + 12.8, x + 4.2, y0, LW)
-        p.hline(x, x + 5.7, y0 + 1.4, LW)
+        p.hline(x, x + 5.7, y0 + 1.5, LW)
+        dashes = [(-19.8, -18.4), (-15.6, -13.5), (-10.6, -8.5), (-5.7, -3.5), (0.0, 1.8)]
+        zig = -13.5
     else:
-        p.line(x, y0 + 12.8, x - 7.1, y0 + 0.2, LW)
-    # толкатель: пунктир и «кнопка»
-    ax = x - 7.1 if not nc else x - 1.4
-    p.line(ax - 4.0, y0 + 7.1, ax - 1.0, y0 + 7.1, LW)
-    p.line(ax - 8.5, y0 + 7.1, ax - 6.4, y0 + 9.3, LW)
-    p.line(ax - 6.4, y0 + 9.3, ax - 4.9, y0 + 7.1, LW)
-    p.line(ax - 14.2, y0 + 4.3, ax - 14.2, y0 + 10.0, LW)
-    p.line(ax - 14.2, y0 + 4.3, ax - 11.4, y0 + 4.3, LW)
-    p.line(ax - 14.2, y0 + 7.1, ax - 9.9, y0 + 7.1, LW)
+        p.line(x, y0 + 12.8, x - 7.1, y0, LW)
+        dashes = [(-19.8, -17.7), (-14.9, -12.8), (-9.9, -7.8), (-5.0, -3.2)]
+        zig = -12.8
+    ya = y0 + 7.1
+    for a, b in dashes:                                   # пунктир толкателя
+        p.hline(x + a, x + b, ya, LW)
+    p.line(x + zig, ya, x + zig + 1.5, ya + 2.2, LW)       # «зубец» кнопки
+    p.line(x + zig + 1.5, ya + 2.2, x + zig + 2.9, ya, LW)
+    bx = x - 19.8                                         # скоба привода
+    p.vline(bx, y0 + 4.3, y0 + 10.0, LW)
+    p.hline(bx, bx + 2.8, y0 + 4.3, LW)
+    p.hline(bx - 2.9, bx, y0 + 10.0, LW)
     a, b = ("11", "12") if nc else ("13", "14")
-    p.text(x + 1.4, y0 - 2.4, a, PIN)
+    p.text(x + 1.4, y0 - 1.8, a, PIN)
     p.text(x + 1.4, y0 + 22.2, b, PIN)
-    p.text(ax - 17.0, y0 + 11.0, name, TAG, "right")
+    p.text(x - 25.7, y0 + 11.3, name, TAG, "right")
     if ref:
-        p.text(x - 6.0, y0 + 31.0, ref, PIN, "right")
+        p.text(x - 7.7, y0 + 31.9, ref, PIN, "right")
 
 
 def coil(p: Pen, x, y0, name, param, top_pin="A1", bottom_pin="A2"):
@@ -227,6 +246,35 @@ def mirror(p: Pen, x, y, contacts: list[tuple[str, str]]):
             p.line(x0 + 15.1, yy + 3.9, x0 + 15.1, yy + 7.9, LW)
 
 
+def junction(p: Pen, x, y):
+    """Отвод от горизонтали вниз (значок EPLAN): косая черта в углу."""
+    p.line(x, y + 5.6, x + 5.6, y, LW)
+
+
+def drop_bus(p: Pen, xs: list[float], y: float, up: bool = False):
+    """Шина с отводами как в образце: у первого отвода тонкий скос «/», у остальных —
+    толстый «\\»; «шина» на первом участке. up=True — отводы приходят сверху
+    (катушки), иначе уходят вниз (контакты реле)."""
+    xs = sorted(xs)
+    p.hline(xs[0] + 5.7, xs[-1], y, LW_BUS)
+    for i, x in enumerate(xs):
+        w = LW if i == 0 else LW_BUS
+        if up:                                    # катушки: скос вправо у всех, кроме последней
+            if i < len(xs) - 1:
+                p.line(x, y - 5.7, x + 5.7, y, w)
+            p.vline(x, y - 11.3, y, LW_BUS)
+        elif i == 0:                              # контакты: у первого «/», у остальных «\\»
+            p.line(x, y + 5.7, x + 5.7, y, LW)
+            p.vline(x, y, y + 11.3, LW_BUS)
+        else:
+            p.line(x - 5.7, y, x, y + 5.7, LW_BUS)
+            p.vline(x, y + 5.7, y + 11.3, LW_BUS)
+    for x in (xs[:-1] if up else xs[:1]):          # у катушек «шина» на каждом участке
+        lx = x + 22.7
+        p.line(lx - 2.8, y - 2.8, lx + 2.8, y + 2.8, LW)
+        p.text(lx + 4.2, y - 1.5, "шина", SMALL)
+
+
 def bus(p: Pen, x0, x1, y, label_x=None):
     """Шина (толстая линия) с подписью «шина»."""
     p.hline(x0, x1, y, LW_BUS)
@@ -246,9 +294,13 @@ def desc_lines(text: str, width: float, size=PIN) -> tuple[list[str], float]:
 
 
 def centered_lines(p: Pen, x, y_top, text: str, width: float, size=PIN, step=9.2):
+    """Подпись по центру. Строка-место («+1KK1-XT2:2») — ниже, с отступом, как в образце."""
     lines, size = desc_lines(text, width, size)
+    y = y_top + size * 0.85
     for i, ln in enumerate(lines):
-        p.text(x, y_top + size * 0.85 + i * step, ln, size, "center")
+        if i:
+            y += 21.9 if ln.startswith("+") and not lines[i - 1].startswith("+") else step
+        p.text(x, y, ln, size, "center")
 
 
 def fits(s: str, w: float, size: float) -> bool:
