@@ -40,6 +40,7 @@ PROJECT_FIELDS = [
     ("Суффикс схемы", "e3_doc_suffix", False, "Э3"),
     ("Название схемы", "e3_doc_name", False, "Схема электрическая принципиальная"),
     ("Первый лист ПЛК в схеме", "e3_first_io_sheet", False, "2"),
+    ("Лист питания 24В в схеме", "e3_power24_sheet", False, ""),
     ("Литера", "litera", False, ""),
     ("Масса", "mass", False, ""),
     ("Масштаб", "scale", False, ""),
@@ -187,14 +188,15 @@ def read_document(path: str | Path) -> Document:
                 tier=tier, bridge=rec["Группа перемычки"]))
 
     # Схема Э3: модули ПЛК и каналы
-    from .e3.excel import read_plc
+    from .e3.excel import read_plc, read_power24
     plc = read_plc(wb, _sheet, _table, problems)
+    p24 = read_power24(wb, _sheet, _table, problems)
 
-    if not spec and not blocks and not plc and not problems:
+    if not spec and not blocks and not plc and not p24 and not problems:
         problems.append("В файле нет ни строк спецификации, ни клемм, ни каналов ПЛК.")
     if problems:
         raise TemplateError(problems)
-    return Document(project, spec, blocks, plc)
+    return Document(project, spec, blocks, plc, p24)
 
 
 # ---------------------------------------------------------------------- запись
@@ -247,8 +249,9 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
             ws4.append([blk.name, r.part_no, r.type_no, r.section, r.marking,
                         r.jumper, r.cover, r.label, tier, _num(r.bridge)])
 
-    from .e3.excel import write_plc
+    from .e3.excel import write_plc, write_power24
     write_plc(wb, doc.plc if doc else [], _header)
+    write_power24(wb, doc.power24 if doc else None, _header)
     _help_sheet(wb.create_sheet("Инструкция"))
     wb.save(path)
 
@@ -306,6 +309,15 @@ def _help_sheet(ws) -> None:
         "лист.столбец цели (12.1), у контакта — где катушка (/16.3), у катушки — где контакт.",
         "   Параметр — надпись у катушки/лампы (=24V).",
         "   Вывод без провода и элемента (резерв) рисуется только с подписью.",
+        "",
+        "ПИТАНИЕ 24 В (лист «Питание 24В»): строки по группам.",
+        "   Группа автоматов (напр. 1): строка «ввод» — откуда питание шины (Связь, провод); "
+        "строки «автомат» — Обозначение (1QFU1), Номинал (DC 1A 'C'), провод, Связь/Ссылка — "
+        "куда идёт (напр. -ES1:V+), Связь 2 — второй потребитель, Подпись — надпись в рамке.",
+        "   Шина минусов (Группа = имя клеммника, напр. XM1): «ввод» и строки «отвод вверх» / "
+        "«отвод вниз» — Обозначение = клемма (M1), провод, Связь (-ES1:V-).",
+        "   Ссылки лист.столбец на стрелках можно не писать — если потребитель есть на "
+        "листах ПЛК, ссылка подставится сама.",
         "   «Первый лист ПЛК в схеме» (лист «Проект»): если перед листами ПЛК в схеме "
         "должны идти другие листы (силовая часть и т.п.), укажите номер, с которого "
         "начинать — нумерация и ссылки будут с учётом этого.",

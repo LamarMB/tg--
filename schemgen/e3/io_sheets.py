@@ -28,12 +28,35 @@ def _norm_tag(t: str) -> str:
     return t.strip().lstrip("-").upper()
 
 
+def _norm_point(t: str) -> str:
+    """«-A3:A9 / 10.9» -> «A3:A9»"""
+    t = str(t or "").split("/")[0]
+    return re.sub(r"\s+", "", t).lstrip("-").upper()
+
+
+def split_link(link: str, ref: str, xr: "XRef") -> tuple[str, str]:
+    """Стрелка: текст ссылки и «лист.столбец» (вручную или автоматически)."""
+    link = str(link or "").strip()
+    if "/" in link and not ref:                  # «-1QFU4:1 / 4.2»
+        link, ref = (x.strip() for x in link.split("/", 1))
+    return link, (ref.strip() or xr.point_ref(link))
+
+
 # ----------------------------------------------------------------- реестр
 @dataclass
 class XRef:
     """Где стоят элементы: tag -> [(вид, лист, столбец)]."""
     heads: dict[str, tuple[int, int]] = field(default_factory=dict)       # катушка/лампа
     contacts: dict[str, list[tuple[str, int, int]]] = field(default_factory=dict)
+    points: dict[str, tuple[int, int]] = field(default_factory=dict)      # «A3:A9» -> место
+
+    def point(self, key: str, sheet: int, x: float):
+        self.points.setdefault(_norm_point(key), (sheet, column(x)))
+
+    def point_ref(self, link: str) -> str:
+        """Ссылка «лист.столбец» для стрелки на точку (-A3:A9, -1QFU4:1, -XM1:M5)."""
+        loc = self.points.get(_norm_point(link))
+        return f"{loc[0]}.{loc[1]}" if loc else ""
 
     def head(self, t, sheet, x):
         self.heads.setdefault(_norm_tag(t), (sheet, column(x)))
@@ -155,11 +178,13 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
 
 
 # ----------------------------------------------------------------- ссылки
-def register(pages: list[_Page], first_sheet: int) -> XRef:
-    xr = XRef()
+def register(pages: list[_Page], first_sheet: int, xr: XRef | None = None) -> XRef:
+    xr = xr or XRef()
     for i, pg in enumerate(pages):
         pg.number = first_sheet + i
         for b in pg.blocks:
+            for pos in b.regular + b.special:
+                xr.point(f"{b.module.tag}:{pos.ch.pin}", pg.number, pos.x)
             for pos in b.regular:
                 ch = pos.ch
                 if not ch.device:
@@ -223,7 +248,8 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
             S.wire(p, x, yy, pin_y)
             tip = b.special[-1].x + 17.0
             p.hline(x, tip - 7.8, yy, S.LW)
-            S.arrow_right(p, tip, yy, ch.link + (f"/{ch.ref.lstrip('/')}" if ch.ref else ""))
+            lk, rf = split_link(ch.link, ch.ref, xr)
+            S.arrow_right(p, tip, yy, lk + (f"/{rf.lstrip('/')}" if rf else ""))
         elif el in (CONTACT_SSR, CONTACT_CO):
             relay_x.append(x)
             p.vline(x, bus_y, bus_y + 11.3, S.LW_BUS)
@@ -245,7 +271,7 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
                 S.wire_mark(p, x, 388.5, m.feed_wire)
         else:
             S.wire(p, x, 473.5, pin_y)
-            S.arrow_down(p, x, 473.5, ch.link, ch.ref, 8.5)
+            S.arrow_down(p, x, 473.5, *split_link(ch.link, ch.ref, xr), 8.5)
         if _wire_lines(ch):
             S.wire_mark(p, x, mark_y, _wire_lines(ch))
 
@@ -313,7 +339,8 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
             S.wire(p, x, wire_top, yy)
             tip = x + 26.0
             p.hline(x, tip if el == SUPPLY else tip - 7.8, yy, S.LW)
-            text = ch.link + (f"/{ch.ref.lstrip('/')}" if ch.ref else "")
+            lk, rf = split_link(ch.link, ch.ref, xr)
+            text = lk + (f"/{rf.lstrip('/')}" if rf else "")
             if el == SUPPLY:
                 S.arrow_in_from_right(p, tip, yy, text)
             else:
@@ -338,7 +365,7 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
         else:
             y_tip = bottom + 88.6
             S.wire(p, x, wire_top, y_tip)
-            S.arrow_down_out(p, x, y_tip, ch.link, ch.ref)
+            S.arrow_down_out(p, x, y_tip, *split_link(ch.link, ch.ref, xr))
         if _wire_lines(ch):
             S.wire_mark(p, x, mark_y, _wire_lines(ch))
 

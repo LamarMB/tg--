@@ -277,3 +277,25 @@ class AssistantUnits(unittest.TestCase):
         self.assertEqual(out["plc"][1]["channels"], [3])
         self.assertEqual([b["name"] for b in out["terminals"]], ["X2", "X3"])
         self.assertEqual(out["spec"], [{"name": "a"}])
+
+
+class Power24Sheet(unittest.TestCase):
+    def test_example_power24_and_autorefs(self):
+        from schemgen.e3 import io_sheets, power24
+        d = read_document(EXAMPLE)
+        self.assertEqual([len(g.breakers) for g in d.power24.groups], [9, 8])
+        self.assertEqual(len(d.power24.minus[0].taps), 25)
+        xr = io_sheets.XRef()
+        sheets = power24.layout(d.power24)
+        power24.register(sheets, 4, xr)
+        io_sheets.register(io_sheets.layout(d.plc), 6, xr)
+        self.assertEqual(xr.point_ref("-A3:A9").split(".")[0], "10")   # вывод модуля
+        self.assertEqual(xr.point_ref("-1QFU4:1").split(".")[0], "4")  # автомат
+        self.assertEqual(xr.point_ref("-XM1:M5").split(".")[0], "4")   # шина минусов
+
+    def test_merge_power24_remove_breaker_by_tag(self):
+        from schemgen.assistant import merge
+        cur = {"power24": {"groups": [{"name": "2", "breakers": [{"tag": "-2QFU7"},
+                                                                  {"tag": "-2QFU8"}]}]}}
+        out = merge(cur, {"remove_power24_groups": ["2QFU8"]})
+        self.assertEqual([b["tag"] for b in out["power24"]["groups"][0]["breakers"]], ["-2QFU7"])

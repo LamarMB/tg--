@@ -29,6 +29,9 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
 1. Не выдумывай то, чего пользователь не говорил: артикулы, производителей, номера
    листов, фамилии. Оставляй такие поля пустыми и перечисли главное недостающее в
    questions (коротко, не больше 6 пунктов).
+1б. Артикул и производитель у новой или изменённой позиции — ТОЛЬКО если пользователь их
+   назвал в этом сообщении. Не подбирай и не «продолжай ряд» артикулов по аналогии
+   (13350DEK, 13351DEK → 13353DEK — нельзя): оставь пустым и спроси в questions.
 1а. Переноси ВСЕ перечисленные пользователем позиции, клеммы и каналы полностью и
    дословно (наименование, артикул, количество, производитель) — не сокращай, не
    объединяй и не пропускай, даже если их сотни.
@@ -38,13 +41,18 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    не сказано иное), № выводов модулей по порядку (A1…A8, B1…B8, COM — A9/B9).
 3. Если в проекте уже есть данные, меняй только то, о чём просит пользователь:
    project — только изменённые поля;
+   power24 — только изменённые группы/шины минусов, каждая целиком;
    spec — если меняется, весь список целиком (все позиции, включая неизменённые);
    terminals — только изменённые/новые клеммники, каждый целиком (все строки);
      удалённые клеммники перечисли в remove_terminal_blocks;
    plc — только изменённые/новые модули, каждый целиком (все каналы, как были, с
      правкой); удалённые модули перечисли в remove_plc_modules (по key).
    Неизменённое не присылай.
-4. Спецификация (spec): одна строка — одна позиция; designation — обозначения через «;»
+4. Спецификация (spec): правка одного изделия из общей строки (напр. «1QFU6 на 6А» при
+   строке «1QFU6;2QFU3;2QFU6 … 4А, 3 шт») — убери его обозначение из общей строки и
+   уменьши её количество, а для него заведи отдельную строку. Остальные изделия
+   общей строки не меняются. Если изделие удалено из схемы — убери его и из спецификации.
+   Одна строка — одна позиция; designation — обозначения через «;»
    (напр. «QF1;QF2») или диапазоном «1K1...1K4»; qty — число строкой.
 5. Клеммы (terminals): блок = клеммник; строка = клемма или крышка. label — надпись
    клеммы (L, N, PE, 1, 2 …); section — сечение («2,5», «1,5»); у концевой крышки
@@ -74,6 +82,13 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    Марку провода придумывай всегда: вход «<модуль>-DI<n>» (n с 0), выход
    «<модуль>-Q<n>», общий — по клемме («XM1-M3»). Ссылки на устройства в link, feed,
    common пиши с минусом: «-1XT1:1».
+6а. Питание 24 В (power24): группы автоматов на шине (groups) и шины минусов (minus).
+   Автомат: tag «-1QFU1», rating «DC 1A 'C'», wire (марка «1QFU1-1», RD, 0,5), targets —
+   куда идёт (до двух, «-A3:A9»), caption — назначение («Питание ПЛК»). Шина минусов:
+   name «XM1», taps — отводы: clamp «M1», up (вверх/вниз), link «-ES1:V-».
+   Правка: присылай изменённую группу / шину целиком (все автоматы / отводы). Чтобы
+   убрать один автомат — пришли его группу целиком без него. remove_power24_groups —
+   только для удаления группы или шины целиком. Ссылки «лист.столбец» не выдумывай — программа ставит их сама.
 7. summary — 1–3 предложения по-русски: только что именно изменено/добавлено.
    Не пиши о том, что не менялось, и не упоминай «разделы» и «запросы».
 """
@@ -119,6 +134,38 @@ TOOL = {
                 "qty": _str("количество"),
                 "manufacturer": _str("производитель (только если назван)"),
                 "note": _str("примечание")}}},
+            "power24": {"type": "object", "description": "Лист «Распределение питания 24 В»",
+                        "properties": {
+                "groups": {"type": "array", "description": "группы автоматов на общей шине",
+                           "items": {"type": "object", "properties": {
+                    "name": _str("имя группы: 1, 2 …"),
+                    "source": _str("откуда питание шины: -X0.3:1L+"),
+                    "source_ref": _str("ссылка вручную"),
+                    "source_wire": WIRE,
+                    "breakers": {"type": "array", "items": {"type": "object", "properties": {
+                        "tag": _str("автомат: -1QFU1"),
+                        "rating": _str("номинал: DC 1A 'C'"),
+                        "wire": WIRE,
+                        "targets": {"type": "array", "description": "потребители (до двух)",
+                                    "items": {"type": "object", "properties": {
+                                        "link": _str("-ES1:V+, -A3:A9, -1XT1:L+"),
+                                        "ref": _str("ссылка вручную (лист.столбец)")}}},
+                        "caption": _str("надпись в рамке: «Питание коммутатора»")}}}}}},
+                "minus": {"type": "array", "description": "шины минусов (клеммник XM1 …)",
+                          "items": {"type": "object", "properties": {
+                    "name": _str("клеммник: XM1"),
+                    "source": _str("откуда минус: -X0.3:1M"),
+                    "source_ref": _str("ссылка вручную"),
+                    "source_wire": WIRE,
+                    "taps": {"type": "array", "items": {"type": "object", "properties": {
+                        "clamp": _str("клемма: M1"),
+                        "up": {"type": "boolean", "description": "отвод вверх (иначе вниз)"},
+                        "wire": WIRE,
+                        "link": _str("куда: -ES1:V-, -A1:A9"),
+                        "ref": _str("ссылка вручную")}}}}}}}},
+            "remove_power24_groups": {"type": "array", "items": {"type": "string"},
+                                      "description": "имена групп автоматов / шин минусов, "
+                                                     "которые удалить"},
             "remove_terminal_blocks": {"type": "array", "items": {"type": "string"},
                                        "description": "имена клеммников, которые удалить"},
             "remove_plc_modules": {"type": "array", "items": {"type": "string"},
@@ -166,7 +213,7 @@ TOOL = {
     },
 }
 
-SECTIONS = ("project", "spec", "terminals", "plc")
+SECTIONS = ("project", "spec", "terminals", "plc", "power24")
 
 
 class AssistantError(Exception):
@@ -175,14 +222,16 @@ class AssistantError(Exception):
 
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
-GROUPS = [("project", "spec"), ("terminals",), ("plc",)]
+GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24",)]
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
-               "terminals": "клеммники", "plc": "модули ПЛК и каналы"}
+               "terminals": "клеммники", "plc": "модули ПЛК и каналы",
+               "power24": "распределение питания 24 В (автоматы QFU, шина минусов)"}
 
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
-    extra = {"terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"]}
+    extra = {"terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
+             "power24": ["remove_power24_groups"]}
     keep = ["summary", "questions", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
@@ -248,6 +297,8 @@ def _call(api_key, current, message, sections, model, url, timeout) -> dict:
                 allowed.add("remove_terminal_blocks")
             if "plc" in sections:
                 allowed.add("remove_plc_modules")
+            if "power24" in sections:
+                allowed.add("remove_power24_groups")
             return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
@@ -302,4 +353,26 @@ def merge(current: dict, update: dict) -> dict:
             else:
                 items[idx] = new
         out[sec] = items
+    pw_new = update.get("power24") or {}
+    rm = {str(x).strip().upper() for x in update.get("remove_power24_groups") or []}
+    if pw_new or rm:
+        pw = dict(out.get("power24") or {})
+        for part in ("groups", "minus"):
+            items = [x for x in pw.get(part) or []
+                     if str(x.get("name", "")).strip().upper() not in rm]
+            for new in pw_new.get(part) or []:
+                k = str(new.get("name", "")).strip().upper()
+                idx = next((i for i, x in enumerate(items)
+                            if str(x.get("name", "")).strip().upper() == k), None)
+                if idx is None:
+                    items.append(new)
+                else:
+                    items[idx] = new
+            pw[part] = items
+        # модель иногда кладёт в remove_power24_groups обозначение автомата — удаляем его
+        for g in pw.get("groups") or []:
+            g["breakers"] = [b for b in g.get("breakers") or []
+                             if str(b.get("tag", "")).strip().lstrip("-").upper()
+                             not in {x.lstrip("-") for x in rm}]
+        out["power24"] = pw
     return out

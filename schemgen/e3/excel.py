@@ -110,3 +110,82 @@ def write_plc(wb, modules: list[PlcModule], header) -> None:
             w = (c.wire + ["", "", ""])[:3]
             ws2.append([m.key or m.tag, c.pin, c.desc, *w, names[c.element], c.device, c.link,
                         c.ref, c.param])
+
+
+# ------------------------------------------------------------ Питание 24 В
+P24_COLS = ["Группа", "Тип", "Обозначение", "Номинал", "Марка провода", "Цвет",
+            "Сечение", "Связь", "Ссылка", "Связь 2", "Ссылка 2", "Подпись"]
+P24_TYPES = {"ввод": "ввод", "источник": "ввод", "автомат": "автомат", "qf": "автомат",
+             "отвод вверх": "вверх", "вверх": "вверх", "отвод вниз": "вниз", "вниз": "вниз"}
+
+
+def read_power24(wb, find_sheet, table, problems):
+    from .power24 import Breaker, BreakerGroup, MinusBus, MinusTap, Power24
+    ws = find_sheet(wb, "Питание 24В", False, problems) or \
+        find_sheet(wb, "Питание 24 В", False, problems)
+    if ws is None:
+        return None
+    rows, last = [], ""
+    for rec in table(ws, P24_COLS, problems):
+        grp = rec["Группа"] or last
+        last = grp
+        kind = P24_TYPES.get(rec["Тип"].strip().lower())
+        if not grp or kind is None:
+            problems.append(f"Лист «Питание 24В», группа {grp or '?'}: тип «{rec['Тип']}» — "
+                            "нужно: ввод, автомат, отвод вверх, отвод вниз.")
+            continue
+        rows.append((grp, kind, rec))
+    pw = Power24()
+    groups: dict[str, object] = {}
+    for grp, kind, rec in rows:
+        is_minus = any(g == grp and k in ("вверх", "вниз") for g, k, _ in rows)
+        obj = groups.get(grp)
+        if obj is None:
+            obj = MinusBus(grp.lstrip("-")) if is_minus else BreakerGroup(grp)
+            groups[grp] = obj
+            (pw.minus if is_minus else pw.groups).append(obj)
+        wire = [rec["Марка провода"], rec["Цвет"], rec["Сечение"]]
+        if kind == "ввод":
+            obj.source, obj.source_ref, obj.source_wire = rec["Связь"], rec["Ссылка"], wire
+        elif kind == "автомат":
+            if is_minus:
+                problems.append(f"Лист «Питание 24В», группа {grp}: автоматы и отводы "
+                                "минуса в одной группе.")
+                continue
+            tag = rec["Обозначение"]
+            tag = tag if tag.startswith("-") or not tag else "-" + tag
+            targets = [(rec["Связь"], rec["Ссылка"])]
+            if rec["Связь 2"]:
+                targets.append((rec["Связь 2"], rec["Ссылка 2"]))
+            obj.breakers.append(Breaker(tag, rec["Номинал"], wire, targets, rec["Подпись"]))
+        else:
+            obj.taps.append(MinusTap(rec["Обозначение"], kind == "вверх", wire,
+                                     rec["Связь"], rec["Ссылка"]))
+    return pw if pw else None
+
+
+def write_power24(wb, pw, header) -> None:
+    ws = wb.create_sheet("Питание 24В")
+    header(ws, P24_COLS, [8, 11, 12, 12, 12, 8, 8, 20, 8, 16, 8, 24])
+    from openpyxl.worksheet.datavalidation import DataValidation
+    dv = DataValidation(type="list", allow_blank=True,
+                        formula1='"ввод,автомат,отвод вверх,отвод вниз"')
+    ws.add_data_validation(dv)
+    dv.add("B2:B2000")
+    if not pw:
+        return
+    for g in pw.groups:
+        if g.source:
+            ws.append([g.name, "ввод", "", "", *(g.source_wire + ["", "", ""])[:3],
+                       g.source, g.source_ref, "", "", ""])
+        for b in g.breakers:
+            t = b.targets + [("", "")] * (2 - len(b.targets))
+            ws.append([g.name, "автомат", b.tag, b.rating, *(b.wire + ["", "", ""])[:3],
+                       t[0][0], t[0][1], t[1][0], t[1][1], b.caption])
+    for m in pw.minus:
+        if m.source:
+            ws.append([m.name, "ввод", "", "", *(m.source_wire + ["", "", ""])[:3],
+                       m.source, m.source_ref, "", "", ""])
+        for t in m.taps:
+            ws.append([m.name, "отвод вверх" if t.up else "отвод вниз", t.clamp, "",
+                       *(t.wire + ["", "", ""])[:3], t.link, t.ref, "", "", ""])

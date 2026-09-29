@@ -18,7 +18,55 @@ def doc_to_dict(doc: Document) -> dict:
         "terminals": [{"name": b.name, "rows": [asdict(r) for r in b.rows]}
                       for b in doc.terminals],
         "plc": [_mod_to_dict(m) for m in doc.plc],
+        "power24": _p24_to_dict(doc.power24),
     }
+
+
+def _p24_to_dict(pw) -> dict | None:
+    if not pw:
+        return None
+    return {
+        "groups": [{"name": g.name, "source": g.source, "source_ref": g.source_ref,
+                    "source_wire": _wire_obj(g.source_wire),
+                    "breakers": [{"tag": b.tag, "rating": b.rating, "wire": _wire_obj(b.wire),
+                                  "targets": [{"link": l, "ref": r} for l, r in b.targets],
+                                  "caption": b.caption} for b in g.breakers]}
+                   for g in pw.groups],
+        "minus": [{"name": m.name, "source": m.source, "source_ref": m.source_ref,
+                   "source_wire": _wire_obj(m.source_wire),
+                   "taps": [{"clamp": t.clamp, "up": t.up, "wire": _wire_obj(t.wire),
+                             "link": t.link, "ref": t.ref} for t in m.taps]}
+                  for m in pw.minus],
+    }
+
+
+def _dict_to_p24(d):
+    from .e3.power24 import Breaker, BreakerGroup, MinusBus, MinusTap, Power24
+    if not d:
+        return None
+    pw = Power24()
+    for g in d.get("groups") or []:
+        grp = BreakerGroup(_s(g.get("name")) or str(len(pw.groups) + 1), _dash(g.get("source")),
+                           _s(g.get("source_ref")), _wire(g.get("source_wire")))
+        for b in g.get("breakers") or []:
+            tag = _dash(b.get("tag"))
+            if not tag:
+                continue
+            grp.breakers.append(Breaker(tag, _s(b.get("rating")), _wire(b.get("wire")),
+                                        [(_dash(t.get("link")), _s(t.get("ref")))
+                                         for t in (b.get("targets") or [])[:2]],
+                                        _s(b.get("caption"))))
+        if grp.breakers:
+            pw.groups.append(grp)
+    for m in d.get("minus") or []:
+        mb = MinusBus(_s(m.get("name")).lstrip("-") or "XM1", _dash(m.get("source")),
+                      _s(m.get("source_ref")), _wire(m.get("source_wire")))
+        for t in m.get("taps") or []:
+            mb.taps.append(MinusTap(_s(t.get("clamp")), bool(t.get("up")), _wire(t.get("wire")),
+                                    _dash(t.get("link")), _s(t.get("ref"))))
+        if mb.taps:
+            pw.minus.append(mb)
+    return pw if pw else None
 
 
 def _wire_obj(w: list[str]) -> dict:
@@ -103,7 +151,7 @@ def dict_to_doc(d: dict) -> Document:
                                            _s(c.get("ref")), _s(c.get("param"))))
         if mod.tag and mod.channels:
             plc.append(mod)
-    return Document(project, spec, terms, plc)
+    return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")))
 
 
 def check(doc: Document) -> list[str]:

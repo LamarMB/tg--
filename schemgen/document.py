@@ -1,7 +1,7 @@
 """Сборка PDF из модели."""
 from __future__ import annotations
 
-from .e3 import io_sheets
+from .e3 import io_sheets, power24
 from .frame import draw_frame
 from .model import Document
 from .pen import Pen
@@ -39,13 +39,28 @@ def render_pdf(doc: Document, path: str) -> int:
             pages += terminal_pages(doc.terminals)
         total += _emit(pen, pr, _code(pr, pr.spec_doc_suffix), pr.spec_doc_name, pages)
 
-    # Документ Э3: титул + листы входов/выходов ПЛК
-    if doc.plc:
-        first = int(pr.e3_first_io_sheet or 2)
-        io_pages = io_sheets.layout(doc.plc)
-        xr = io_sheets.register(io_pages, first_sheet=first)
-        pages = [title_page(pr)] + [io_sheets.painter(pg, xr) for pg in io_pages]
-        numbers = [1] + [pg.number for pg in io_pages]
+    # Документ Э3: титул + питание 24 В + листы входов/выходов ПЛК.
+    # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
+    # чтобы ссылки между листами разных типов подставлялись сами.
+    p24 = doc.power24 if doc.power24 else None
+    if doc.plc or p24:
+        xr = io_sheets.XRef()
+        numbers, pages = [1], [title_page(pr)]
+        nxt = 2
+        p24_sheets = power24.layout(p24) if p24 else []
+        if p24_sheets:
+            start = int(pr.e3_power24_sheet) if str(pr.e3_power24_sheet).isdigit() else nxt
+            power24.register(p24_sheets, max(start, nxt), xr)
+            nxt = p24_sheets[-1].number + 1
+        io_pages = io_sheets.layout(doc.plc) if doc.plc else []
+        if io_pages:
+            io_sheets.register(io_pages, max(int(pr.e3_first_io_sheet or 2), nxt), xr)
+        for sh in p24_sheets:
+            numbers.append(sh.number)
+            pages.append(power24.painter(sh, xr))
+        for pg in io_pages:
+            numbers.append(pg.number)
+            pages.append(io_sheets.painter(pg, xr))
         total += _emit(pen, pr, _code(pr, pr.e3_doc_suffix), pr.e3_doc_name, pages,
                        numbers, sheets_total=numbers[-1])
 
