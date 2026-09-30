@@ -226,16 +226,41 @@ def _p24_to_dict(pw) -> dict | None:
         "minus": [{"name": m.name, "source": m.source, "source_ref": m.source_ref,
                    "source_wire": _wire_obj(m.source_wire),
                    "taps": [{"clamp": t.clamp, "up": t.up, "wire": _wire_obj(t.wire),
-                             "link": t.link, "ref": t.ref} for t in m.taps]}
+                             "link": t.link, "ref": t.ref} for t in m.taps],
+                   **({"layout": m.layout} if m.layout else {})}
                   for m in pw.minus],
+        **({"inputs": [{"name": b.name, "note": b.note,
+                        "clamps": [{"name": c.name, "source": c.source,
+                                    "source_ref": c.source_ref,
+                                    "source_wire": _wire_obj(c.source_wire),
+                                    "wire": _wire_obj(c.wire), "feed": c.feed,
+                                    "jumper": c.jumper, **({"x": c.x} if c.x else {})}
+                                   for c in b.clamps]} for b in pw.inputs]}
+           if pw.inputs else {}),
     }
 
 
 def _dict_to_p24(d):
-    from .e3.power24 import Breaker, BreakerGroup, MinusBus, MinusTap, Power24
+    from .e3.power24 import (Breaker, BreakerGroup, InClamp, InputBlock, MinusBus, MinusTap,
+                             Power24)
     if not d:
         return None
     pw = Power24()
+    for b in d.get("inputs") or []:
+        blk = InputBlock(_s(b.get("name")).lstrip("-") or "X0", note=_s(b.get("note")))
+        for c in b.get("clamps") or []:
+            if not _s(c.get("name")):
+                continue
+            try:
+                x = float(c.get("x") or 0)
+            except (TypeError, ValueError):
+                x = 0.0
+            blk.clamps.append(InClamp(_s(c.get("name")), _dash(c.get("source")),
+                                      _s(c.get("source_ref")), _wire(c.get("source_wire")),
+                                      _wire(c.get("wire")), _s(c.get("feed")),
+                                      _s(c.get("jumper")), x))
+        if blk.clamps:
+            pw.inputs.append(blk)
     for g in d.get("groups") or []:
         grp = BreakerGroup(_s(g.get("name")) or str(len(pw.groups) + 1), _dash(g.get("source")),
                            _s(g.get("source_ref")), _wire(g.get("source_wire")))
@@ -251,7 +276,8 @@ def _dict_to_p24(d):
             pw.groups.append(grp)
     for m in d.get("minus") or []:
         mb = MinusBus(_s(m.get("name")).lstrip("-") or "XM1", _dash(m.get("source")),
-                      _s(m.get("source_ref")), _wire(m.get("source_wire")))
+                      _s(m.get("source_ref")), _wire(m.get("source_wire")),
+                      layout=m.get("layout") if isinstance(m.get("layout"), dict) else {})
         for t in m.get("taps") or []:
             mb.taps.append(MinusTap(_s(t.get("clamp")), bool(t.get("up")), _wire(t.get("wire")),
                                     _dash(t.get("link")), _s(t.get("ref"))))

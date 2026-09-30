@@ -117,6 +117,8 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    Автомат: tag «-1QFU1», rating «DC 1A 'C'», wire (марка «1QFU1-1», RD, 0,5), targets —
    куда идёт (до двух, «-A3:A9»), caption — назначение («Питание ПЛК»). Шина минусов:
    name «XM1», taps — отводы: clamp «M1», up (вверх/вниз), link «-ES1:V-».
+   Вводной клеммник (inputs, name «X0.3»): клеммы с источником сверху и feed — какую
+   группу / шину минусов клемма питает; пришли inputs целиком, если его меняешь.
    Правка: присылай изменённую группу / шину целиком (все автоматы / отводы). Чтобы
    убрать один автомат — пришли его группу целиком без него. remove_power24_groups —
    только для удаления группы или шины целиком. Ссылки «лист.столбец» не выдумывай — программа ставит их сама.
@@ -251,7 +253,21 @@ TOOL = {
                         "up": {"type": "boolean", "description": "отвод вверх (иначе вниз)"},
                         "wire": WIRE,
                         "link": _str("куда: -ES1:V-, -A1:A9"),
-                        "ref": _str("ссылка вручную")}}}}}}}},
+                        "ref": _str("ссылка вручную")}}}}}},
+                "inputs": {"type": "array",
+                           "description": "вводной клеммник над автоматами (-X0.3)",
+                           "items": {"type": "object", "properties": {
+                    "name": _str("клеммник: X0.3"),
+                    "note": _str("пояснение справа (необязательно)"),
+                    "clamps": {"type": "array", "items": {"type": "object", "properties": {
+                        "name": _str("клемма: 1L+, 1M"),
+                        "source": _str("откуда питание сверху: -UPS:Output DC 24V:+"),
+                        "source_ref": _str("ссылка вручную"),
+                        "source_wire": WIRE,
+                        "wire": WIRE,
+                        "feed": _str("куда провод: группа «1», шина «XM1» или «XM1:M7»"),
+                        "jumper": _str("пунктирная перемычка на клемму (запасной ввод): 1L+")
+                    }}}}}}}},
             "feeders": {"type": "array", "description": "Лист «Отходящие линии 230 В»",
                         "items": {"type": "object", "properties": {
                 "tag": _str("автомат: -QF1"),
@@ -658,6 +674,8 @@ def merge(current: dict, update: dict) -> dict:
     rm = {str(x).strip().upper() for x in update.get("remove_power24_groups") or []}
     if pw_new or rm:
         pw = dict(out.get("power24") or {})
+        if pw_new.get("inputs"):
+            pw["inputs"] = pw_new["inputs"]
         for part in ("groups", "minus"):
             items = [x for x in pw.get(part) or []
                      if str(x.get("name", "")).strip().upper() not in rm]
@@ -668,6 +686,8 @@ def merge(current: dict, update: dict) -> dict:
                 if idx is None:
                     items.append(new)
                 else:
+                    if items[idx].get("layout") and not new.get("layout"):
+                        new = {**new, "layout": items[idx]["layout"]}   # подгонка под образец
                     items[idx] = new
             pw[part] = items
         # модель иногда кладёт в remove_power24_groups обозначение автомата — удаляем его

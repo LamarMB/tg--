@@ -87,7 +87,7 @@ def _sheet(wb, name: str, required: bool, problems: list[str]):
     return None
 
 
-OPTIONAL_COLS = {"Раскладка"}          # колонки, которых может не быть в старых файлах
+OPTIONAL_COLS = {"Раскладка", "Провод источника"}          # колонки, которых может не быть в старых файлах
 
 
 def _table(ws, columns: list[str], problems: list[str]):

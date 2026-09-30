@@ -142,13 +142,22 @@ def write_plc(wb, modules: list[PlcModule], header) -> None:
 
 # ------------------------------------------------------------ Питание 24 В
 P24_COLS = ["Группа", "Тип", "Обозначение", "Номинал", "Марка провода", "Цвет",
-            "Сечение", "Связь", "Ссылка", "Связь 2", "Ссылка 2", "Подпись"]
+            "Сечение", "Связь", "Ссылка", "Связь 2", "Ссылка 2", "Подпись", "Раскладка",
+            "Провод источника"]
 P24_TYPES = {"ввод": "ввод", "источник": "ввод", "автомат": "автомат", "qf": "автомат",
-             "отвод вверх": "вверх", "вверх": "вверх", "отвод вниз": "вниз", "вниз": "вниз"}
+             "отвод вверх": "вверх", "вверх": "вверх", "отвод вниз": "вниз", "вниз": "вниз",
+             "клемма": "клемма", "клемма ввода": "клемма"}
+
+
+def _split_wire(s: str) -> list[str]:
+    """«L+ / RD / 1,5» → [L+, RD, 1,5]."""
+    parts = [x.strip() for x in str(s or "").replace(";", "/").split("/")]
+    return parts if any(parts) else []
 
 
 def read_power24(wb, find_sheet, table, problems):
-    from .power24 import Breaker, BreakerGroup, MinusBus, MinusTap, Power24
+    from .power24 import (Breaker, BreakerGroup, InClamp, InputBlock, MinusBus, MinusTap,
+                          Power24)
     ws = find_sheet(wb, "Питание 24В", False, problems) or \
         find_sheet(wb, "Питание 24 В", False, problems)
     if ws is None:
@@ -160,12 +169,27 @@ def read_power24(wb, find_sheet, table, problems):
         kind = P24_TYPES.get(rec["Тип"].strip().lower())
         if not grp or kind is None:
             problems.append(f"Лист «Питание 24В», группа {grp or '?'}: тип «{rec['Тип']}» — "
-                            "нужно: ввод, автомат, отвод вверх, отвод вниз.")
+                            "нужно: ввод, автомат, отвод вверх, отвод вниз, клемма.")
             continue
         rows.append((grp, kind, rec))
     pw = Power24()
     groups: dict[str, object] = {}
+    blocks: dict[str, InputBlock] = {}
     for grp, kind, rec in rows:
+        if kind == "клемма":                       # вводной клеммник (-X0.3)
+            blk = blocks.get(grp)
+            if blk is None:
+                blk = blocks[grp] = InputBlock(grp.lstrip("-"))
+                pw.inputs.append(blk)
+            lay = layout_from_text(rec.get("Раскладка", ""))
+            blk.clamps.append(InClamp(
+                rec["Обозначение"], rec["Связь"], rec["Ссылка"],
+                _split_wire(rec.get("Провод источника", "")),
+                [rec["Марка провода"], rec["Цвет"], rec["Сечение"]],
+                rec["Связь 2"], rec["Ссылка 2"], float(lay.get("x0", 0) or 0)))
+            if rec["Подпись"]:
+                blk.note = rec["Подпись"]
+            continue
         is_minus = any(g == grp and k in ("вверх", "вниз") for g, k, _ in rows)
         obj = groups.get(grp)
         if obj is None:
@@ -173,6 +197,8 @@ def read_power24(wb, find_sheet, table, problems):
             groups[grp] = obj
             (pw.minus if is_minus else pw.groups).append(obj)
         wire = [rec["Марка провода"], rec["Цвет"], rec["Сечение"]]
+        if is_minus and rec.get("Раскладка"):
+            obj.layout = layout_from_text(rec["Раскладка"])
         if kind == "ввод":
             obj.source, obj.source_ref, obj.source_wire = rec["Связь"], rec["Ссылка"], wire
         elif kind == "автомат":
@@ -194,10 +220,10 @@ def read_power24(wb, find_sheet, table, problems):
 
 def write_power24(wb, pw, header) -> None:
     ws = wb.create_sheet("Питание 24В")
-    header(ws, P24_COLS, [8, 11, 12, 12, 12, 8, 8, 20, 8, 16, 8, 24])
+    header(ws, P24_COLS, [8, 11, 12, 12, 12, 8, 8, 20, 8, 16, 8, 24, 24, 16])
     from openpyxl.worksheet.datavalidation import DataValidation
     dv = DataValidation(type="list", allow_blank=True,
-                        formula1='"ввод,автомат,отвод вверх,отвод вниз"')
+                        formula1='"ввод,автомат,отвод вверх,отвод вниз,клемма"')
     ws.add_data_validation(dv)
     dv.add("B2:B2000")
     if not pw:
@@ -210,13 +236,23 @@ def write_power24(wb, pw, header) -> None:
             t = b.targets + [("", "")] * (2 - len(b.targets))
             ws.append([g.name, "автомат", b.tag, b.rating, *(b.wire + ["", "", ""])[:3],
                        t[0][0], t[0][1], t[1][0], t[1][1], b.caption])
+    for b in pw.inputs:
+        note = b.note
+        for c in b.clamps:
+            ws.append([b.name, "клемма", c.name, "", *(c.wire + ["", "", ""])[:3],
+                       c.source, c.source_ref, c.feed, c.jumper, note,
+                       f"x0={c.x:g}" if c.x else "", " / ".join(c.source_wire)])
+            note = ""
     for m in pw.minus:
+        lay = layout_to_text(m.layout)
         if m.source:
             ws.append([m.name, "ввод", "", "", *(m.source_wire + ["", "", ""])[:3],
-                       m.source, m.source_ref, "", "", ""])
+                       m.source, m.source_ref, "", "", "", lay])
+            lay = ""
         for t in m.taps:
             ws.append([m.name, "отвод вверх" if t.up else "отвод вниз", t.clamp, "",
-                       *(t.wire + ["", "", ""])[:3], t.link, t.ref, "", "", ""])
+                       *(t.wire + ["", "", ""])[:3], t.link, t.ref, "", "", "", lay])
+            lay = ""
 
 
 # ------------------------------------------------------------ Линии 230 В
