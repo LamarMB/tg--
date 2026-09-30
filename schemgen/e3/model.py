@@ -44,6 +44,7 @@ class PlcModule:
     npn: bool = False        # выход: ключ по минусу (катушка A2 — к выходу)
     channels: list[PlcChannel] = field(default_factory=list)
     key: str = ""            # имя строки в Excel (если позиция повторяется: CPU.DI / CPU.DO)
+    layout: dict = field(default_factory=dict)   # {"xs": {вывод: x}} — положение выводов на листе
 
     @property
     def title(self) -> str:

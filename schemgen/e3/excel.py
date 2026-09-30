@@ -3,8 +3,25 @@ from __future__ import annotations
 
 from .model import INPUT_ELEMENTS, OUTPUT_ELEMENTS, PlcChannel, PlcModule
 
+def layout_to_text(layout: dict) -> str:
+    xs = (layout or {}).get("xs") or {}
+    return "; ".join(f"{k}={v:g}" for k, v in xs.items())
+
+
+def layout_from_text(s: str) -> dict:
+    xs = {}
+    for part in str(s or "").replace(",", ";").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            try:
+                xs[k.strip()] = float(v.strip().replace(" ", ""))
+            except ValueError:
+                pass
+    return {"xs": xs} if xs else {}
+
+
 MOD_COLS = ["Модуль", "Позиция", "Тип", "Вид", "Ссылка", "Стрелка слева", "Стрелка вправо",
-            "Марка провода", "Цвет", "Сечение", "Выходы NPN"]
+            "Марка провода", "Цвет", "Сечение", "Выходы NPN", "Раскладка"]
 CH_COLS = ["Модуль", "Вывод", "Назначение", "Марка провода", "Цвет", "Сечение",
            "Элемент", "Обозначение", "Связь", "Ссылка", "Параметр"]
 
@@ -52,6 +69,7 @@ def read_plc(wb, find_sheet, table, problems) -> list[PlcModule]:
                 problems.append(f"Лист «Модули ПЛК»: модуль {name} указан дважды.")
                 continue
             m.key = name
+            m.layout = layout_from_text(rec.get("Раскладка", ""))
             mods[key] = m
             order.append(m)
     if ws_c is not None:
@@ -87,14 +105,14 @@ def read_plc(wb, find_sheet, table, problems) -> list[PlcModule]:
 
 def write_plc(wb, modules: list[PlcModule], header) -> None:
     ws = wb.create_sheet("Модули ПЛК")
-    header(ws, MOD_COLS, [9, 9, 18, 9, 8, 22, 22, 13, 8, 8, 10])
+    header(ws, MOD_COLS, [9, 9, 18, 9, 8, 22, 22, 13, 8, 8, 10, 30])
     for m in modules:
         wire = m.feed_wire if m.kind == "in" else m.common_wire
         wire = (wire + ["", "", ""])[:3]
         ws.append([m.key or m.tag, m.tag if m.key and m.key != m.tag else "", m.type, "Входы" if m.kind == "in" else "Выходы", m.ref,
                    m.feed if m.kind == "in" else m.common,
                    m.feed_next if m.kind == "in" else "", *wire,
-                   "да" if m.npn else ""])
+                   "да" if m.npn else "", layout_to_text(m.layout)])
     ws2 = wb.create_sheet("Каналы ПЛК")
     header(ws2, CH_COLS, [8, 7, 34, 12, 7, 8, 11, 11, 18, 8, 9])
     from openpyxl.worksheet.datavalidation import DataValidation
@@ -443,3 +461,72 @@ def write_network(wb, net, header) -> None:
                    l.remote, l.remote_ref, l.remote_cable, l.remote_cable_type, l.target,
                    l.target_title.replace("\n", "\\n"), l.target_port,
                    l.note.replace("\n", "\\n")])
+
+
+# ------------------------------------------------------------ Коробки / внешние шкафы
+F2_COLS = ["Зона", "Лист", "Клеммник", "Кабель", "Ссылка кабеля", "Марка кабеля", "Экран",
+           "PE", "Парами", "Удалённое устройство", "Клемма", "Жила", "Удалённый конец",
+           "Ссылка конца", "Направление", "Марка провода", "Цвет", "Сечение", "Элемент",
+           "Обозначение", "Параметр", "Связь", "Ссылка", "Подпись", "Перемычка"]
+
+
+def _yes(v: str) -> bool:
+    return str(v or "").strip().lower() in ("да", "yes", "1", "true", "+")
+
+
+def read_fields(wb, find_sheet, table, problems):
+    from .field import FieldArea, FieldGroup, FieldTerm
+    ws = find_sheet(wb, "Коробки", False, problems)
+    if ws is None:
+        return []
+    areas: list[FieldArea] = []
+    area = grp = None
+    for r in table(ws, F2_COLS, problems):
+        zone = r["Зона"] or (area.zone if area else "")
+        sheet = r["Лист"]
+        if area is None or r["Зона"] and (zone != area.zone or (sheet and sheet != area.sheet)):
+            area = FieldArea(zone, [], sheet)
+            areas.append(area)
+            grp = None
+        block = r["Клеммник"] or (grp.block if grp else "")
+        if not block:
+            problems.append("Лист «Коробки»: строка без клеммника.")
+            continue
+        if grp is None or block != grp.block:
+            grp = FieldGroup(block, r["Кабель"], r["Ссылка кабеля"], r["Марка кабеля"],
+                             _yes(r["Экран"]), _yes(r["PE"]), _yes(r["Парами"]),
+                             r["Удалённое устройство"])
+            area.groups.append(grp)
+        if not r["Клемма"]:
+            continue
+        grp.terms.append(FieldTerm(
+            r["Клемма"], r["Жила"], r["Удалённый конец"], r["Ссылка конца"],
+            "out" if r["Направление"].strip().lower() in ("out", "в поле", "из шкафа") else "in",
+            [r["Марка провода"], r["Цвет"], r["Сечение"]], r["Элемент"].strip().lower(),
+            _t(r["Обозначение"]), r["Параметр"].replace("\\n", "\n"), r["Связь"], r["Ссылка"],
+            r["Подпись"].replace("\\n", "\n"), r["Перемычка"]))
+    return areas
+
+
+def write_fields(wb, areas, header) -> None:
+    ws = wb.create_sheet("Коробки")
+    header(ws, F2_COLS, [7, 5, 9, 11, 10, 26, 6, 5, 7, 10, 7, 5, 18, 10, 9, 11, 7, 7, 9, 9,
+                         12, 12, 7, 28, 9])
+    for a in areas or []:
+        first_area = True
+        for g in a.groups:
+            first = True
+            for t in g.terms or [None]:
+                head = [a.zone if first_area else "", a.sheet if first_area else "",
+                        g.block, g.cable if first else "", g.cable_ref if first else "",
+                        g.cable_type if first else "", ("да" if g.shield else "") if first else "",
+                        ("да" if g.pe else "") if first else "", ("да" if g.paired else "") if first else "",
+                        g.remote_device if first else ""]
+                if t is None:
+                    ws.append(head + [""] * 15)
+                else:
+                    w = (list(t.wire) + ["", "", ""])[:3]
+                    ws.append(head + [t.clamp, t.core, t.remote, t.remote_ref, t.dir, *w, t.element,
+                                      t.device, t.param.replace("\n", "\\n"), t.link, t.ref,
+                                      t.caption.replace("\n", "\\n"), t.bridge])
+                first = first_area = False

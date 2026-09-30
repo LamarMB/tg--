@@ -23,7 +23,42 @@ def doc_to_dict(doc: Document) -> dict:
         "mains": _mains_to_dict(doc.mains),
         "frozen": _frozen_to_list(doc.frozen),
         "network": _net_to_dict(doc.network),
+        "fields": [_area_to_dict(a) for a in doc.fields or []],
     }
+
+
+def _area_to_dict(a) -> dict:
+    return {"zone": a.zone, "sheet": a.sheet, "groups": [
+        {**{k: v for k, v in asdict(g).items() if k != "terms"},
+         "terms": [{**{k: v for k, v in asdict(t).items() if k != "wire"},
+                    "wire": _wire_obj(t.wire)} for t in g.terms]} for g in a.groups]}
+
+
+def _dict_to_areas(items):
+    from .e3.field import FieldArea, FieldGroup, FieldTerm
+    out = []
+    gf, tf = FieldGroup.__dataclass_fields__, FieldTerm.__dataclass_fields__
+    for a in items or []:
+        area = FieldArea(_s(a.get("zone")), [], _s(a.get("sheet")))
+        for g in a.get("groups") or []:
+            if not _s(g.get("block")):
+                continue
+            kw = {k: (bool(v) if k in ("shield", "pe", "paired") else _s(v))
+                  for k, v in g.items() if k in gf and k != "terms"}
+            grp = FieldGroup(**kw)
+            for t in g.get("terms") or []:
+                if not _s(t.get("clamp")):
+                    continue
+                tk = {k: _s(v) for k, v in t.items() if k in tf and k != "wire"}
+                tk["wire"] = _wire(t.get("wire"))
+                tk["dir"] = "out" if tk.get("dir", "").lower() == "out" else "in"
+                if tk.get("device"):
+                    tk["device"] = _dash(tk["device"])
+                grp.terms.append(FieldTerm(**tk))
+            area.groups.append(grp)
+        if area.groups:
+            out.append(area)
+    return out
 
 
 def _net_to_dict(net):
@@ -264,7 +299,8 @@ def dict_to_doc(d: dict) -> Document:
                         _dash(m.get("feed")), _wire(m.get("feed_wire")),
                         _dash(m.get("feed_next")),
                         _dash(m.get("common")), _wire(m.get("common_wire")),
-                        bool(m.get("npn")), [], _s(m.get("key")) or tag)
+                        bool(m.get("npn")), [], _s(m.get("key")) or tag,
+                        m.get("layout") if isinstance(m.get("layout"), dict) else {})
         for c in m.get("channels") or []:
             el = _s(c.get("element")).lower()
             if el not in ELEMENTS:
@@ -279,7 +315,8 @@ def dict_to_doc(d: dict) -> Document:
             plc.append(mod)
     return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
                     _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")),
-                    _frozen_from(d.get("frozen")), _dict_to_net(d.get("network")))
+                    _frozen_from(d.get("frozen")), _dict_to_net(d.get("network")),
+                    _dict_to_areas(d.get("fields")))
 
 
 def _frozen_from(items):

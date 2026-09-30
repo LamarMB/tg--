@@ -44,6 +44,7 @@ PROJECT_FIELDS = [
     ("Лист линий 230В в схеме", "e3_feeders_sheet", False, ""),
     ("Лист ввода 230В в схеме", "e3_mains_sheet", False, ""),
     ("Лист сети в схеме", "e3_network_sheet", False, ""),
+    ("Первый лист коробок в схеме", "e3_fields_sheet", False, ""),
     ("Литера", "litera", False, ""),
     ("Масса", "mass", False, ""),
     ("Масштаб", "scale", False, ""),
@@ -86,6 +87,9 @@ def _sheet(wb, name: str, required: bool, problems: list[str]):
     return None
 
 
+OPTIONAL_COLS = {"Раскладка"}          # колонки, которых может не быть в старых файлах
+
+
 def _table(ws, columns: list[str], problems: list[str]):
     """Находит строку заголовков и отдаёт (номер строки, {колонка: значение})."""
     want = {_norm(c): c for c in columns}
@@ -100,7 +104,7 @@ def _table(ws, columns: list[str], problems: list[str]):
         problems.append(f"Лист «{ws.title}»: не найдена строка заголовков "
                         f"({', '.join(columns)}).")
         return
-    missing = [c for c in columns if c not in idx]
+    missing = [c for c in columns if c not in idx and c not in OPTIONAL_COLS]
     if missing:
         problems.append(f"Лист «{ws.title}»: нет колонок: {', '.join(missing)}.")
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
@@ -196,16 +200,18 @@ def read_document(path: str | Path) -> Document:
     mains = read_mains(wb, _sheet, _table, problems)
     from .e3.excel import read_network
     net = read_network(wb, _sheet, _table, problems)
+    from .e3.excel import read_fields
+    fields = read_fields(wb, _sheet, _table, problems)
     frozen = _read_frozen(wb)
     p24 = read_power24(wb, _sheet, _table, problems)
     feeders = read_feeders(wb, _sheet, _table, problems)
 
-    if not spec and not blocks and not plc and not p24 and not feeders and not mains and not net \
+    if not spec and not blocks and not plc and not p24 and not feeders and not mains and not net and not fields \
             and not problems:
         problems.append("В файле нет ни строк спецификации, ни клемм, ни каналов ПЛК.")
     if problems:
         raise TemplateError(problems)
-    return Document(project, spec, blocks, plc, p24, feeders, mains, frozen, net)
+    return Document(project, spec, blocks, plc, p24, feeders, mains, frozen, net, fields)
 
 
 FROZEN_COLS = ["Лист схемы", "Страница образца", "Файл образца", "Разделы", "Отпечаток"]
@@ -285,6 +291,8 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
     write_mains(wb, doc.mains if doc else None, _header)
     from .e3.excel import write_network
     write_network(wb, doc.network if doc else None, _header)
+    from .e3.excel import write_fields
+    write_fields(wb, doc.fields if doc else [], _header)
     if doc and doc.frozen:
         ws = wb.create_sheet("Шаблон")
         _header(ws, FROZEN_COLS, [10, 12, 20, 30, 36])
@@ -292,6 +300,12 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
             ws.append([f.sheet, f.page, f.pdf, ", ".join(f.keys), f.hash])
         ws.sheet_state = "hidden"
     _help_sheet(wb.create_sheet("Инструкция"))
+    # «=24V» и т.п. — это текст, а не формула Excel
+    for ws_ in wb.worksheets:
+        for row in ws_.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    cell.data_type = "s"
     wb.save(path)
 
 

@@ -32,6 +32,10 @@ class Frozen:
 
 def section_data(doc_dict: dict, key: str):
     """Часть проекта (dict), от которой зависит лист."""
+    if key.startswith("fields:"):
+        items = doc_dict.get("fields") or []
+        i = int(key[7:]) if key[7:].isdigit() else -1
+        return items[i] if 0 <= i < len(items) else None
     if key.startswith("plc:"):
         k = key[4:].upper()
         return [m for m in doc_dict.get("plc") or []

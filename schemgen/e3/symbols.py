@@ -203,8 +203,9 @@ def coil(p: Pen, x, y0, name, param, top_pin="A1", bottom_pin="A2"):
     p.text(x + 1.7, y0 - 1.9, top_pin, PIN)
     p.text(x + 1.7, y0 + 19.9, bottom_pin, PIN)
     p.text(x - 16.2, y0 + 9.3, name, TAG, "right")
-    if param:
-        p.text(x - 16.2, y0 + 20.5, param, PIN, "right")
+    for i, ln in enumerate(str(param or "").split("\n")):
+        if ln:
+            p.text(x - 16.2, y0 + 20.5 + 9.2 * i, ln, PIN, "right")
 
 
 def lamp(p: Pen, x, y0, name, param):
@@ -228,7 +229,7 @@ def mirror(p: Pen, x, y, contacts: list[tuple[str, str]]):
     """«Зеркало» контактов под катушкой: [(тип, ссылка)], тип 'co' или 'no'."""
     for i, (kind, ref) in enumerate(contacts):
         yy = y + i * 18.0
-        x0 = x - 21.0
+        x0 = x - (26.7 if kind == "no" else 21.0)
         if kind == "no":
             p.text(x0, yy + 2.8, "13+", PIN)
             p.line(x0 + 15.5, yy, x0 + 20.0, yy, LW)

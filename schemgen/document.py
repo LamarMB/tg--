@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from . import template
-from .e3 import io_sheets, mains, network, power24, power230
+from .e3 import field as fieldsheets, io_sheets, mains, network, power24, power230
 from .frame import draw_frame
 from .model import Document
 from .pen import Pen
@@ -51,7 +51,8 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
     # Документ Э3: титул + силовые листы + питание 24 В + листы ПЛК.
     # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
     # чтобы ссылки между листами разных типов подставлялись сами.
-    if doc.plc or doc.power24 or doc.feeders or doc.mains or doc.network or frozen:
+    if doc.plc or doc.power24 or doc.feeders or doc.mains or doc.network or doc.fields \
+            or frozen:
         xr = io_sheets.XRef()
         numbers, pages = [1], [title_page(pr)]
         nxt = 2
@@ -85,6 +86,11 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
         if io_pages:
             io_sheets.register(io_pages, start(pr.e3_first_io_sheet), xr)
             plan += [(pg.number, io_sheets.painter(pg, xr)) for pg in io_pages]
+            nxt = io_pages[-1].number + 1
+        fl_sheets = fieldsheets.layout(doc.fields) if doc.fields else []
+        if fl_sheets:
+            nums = fieldsheets.register(fl_sheets, start(pr.e3_fields_sheet), xr)
+            plan += [(n, fieldsheets.painter(sh, xr)) for n, sh in zip(nums, fl_sheets)]
         # листы-шаблоны образца заменяют сгенерированные с тем же номером
         by_num = dict(plan)
         for f in frozen:

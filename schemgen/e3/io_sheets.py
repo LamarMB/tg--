@@ -125,6 +125,14 @@ def _place(chs: list[PlcChannel], start: float, max_step: float, right: float,
     return out
 
 
+def _apply_xs(m: PlcModule, positions: list) -> None:
+    """Положение выводов из раскладки модуля (как в образце) — если заданы все."""
+    xs = (m.layout or {}).get("xs") or {}
+    if positions and all(p.ch.pin in xs for p in positions):
+        for p in positions:
+            p.x = float(xs[p.ch.pin])
+
+
 IN_TOP = 581.2            # верх блока модуля входов
 OUT_TOPS = (82.3, 445.1)  # верх блоков выходов (две половины листа)
 MAX_IN = 18               # обычных выводов на лист входов
@@ -154,6 +162,7 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
                 last = regular[-1].x if regular else 136.1
                 special = [_Pos(c, last + 68.0 + 34.0 * i) for i, c in
                            enumerate(spec if j == len(chunks) - 1 else [])]
+                _apply_xs(m, regular + special)
                 b = _Block(m, regular, special, IN_TOP)
                 xs = [p.x for p in regular + special] or [136.1]
                 b.x0, b.x1 = min(xs) - 45.4, max(max(xs) + 25.5, b.x0 + 200)
@@ -178,6 +187,7 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
                 s = [c for c in g if c.element in (COMMON, SUPPLY)]
                 regular = _place(r, 181.4, 90.7, 900.0, 0.0)
                 special = [_Pos(c, 1054.4 - 34.0 * (len(s) - 1 - i)) for i, c in enumerate(s)]
+                _apply_xs(m, regular + special)
                 b = _Block(m, regular, special, 0.0, 136.1, 1099.8)
                 out_blocks.append(b)
     flush_out()

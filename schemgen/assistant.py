@@ -150,6 +150,16 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    RJ45 / USB A), zone +1KK1/+ZM, remote «+1KK1-XETH1:RJ45», remote_ref, remote_cable
    WET-1CM1, remote_cable_type, target -1PR1 + target_title «Принтер» + target_port P1).
    Правка: устройство или кабель целиком; удалённые — в remove_network_items (tag / кабель).
+6д. Коробки и внешние шкафы (fields): список зон (n — номер зоны в текущем проекте,
+   zone +1KK1/+ZM, groups). Группа = клеммник шкафа (block 1XT1) с полевым кабелем
+   (cable WIO-1ENC1, cable_ref, cable_type, shield — экран на -XSH, pe, paired — реле на
+   парах клемм, remote_device -CC_CPW — если удалённый конец — выводы устройства) и
+   клеммами (terms: clamp, core — жила, remote — «+1KK1-XT1:L+» или вывод устройства,
+   remote_ref, dir in — из поля в шкаф / out — из шкафа в поле, wire, element — пусто /
+   «катушка» / «контакт» / «ттр» (на этой и следующей клемме), device -1K3, param,
+   link — куда в шкафу (-CPU:A1, -2QFU1:1), caption — подпись внизу, bridge).
+   Правка: присылай зону с n и изменённые группы целиком; удалённые группы —
+   remove_field_groups «n:1XT3».
 7. Открытые пункты. Если в запросе перечислены открытые пункты (вопросы и допущения
    с номерами), сообщение пользователя может быть ответом на них («1 да», «3 — реле
    на 230 В», «всё ок»). Внеси изменения по ответу, номера закрытых пунктов верни в
@@ -321,6 +331,28 @@ TOOL = {
                     "remote_cable_type": _str("F/UTP CAT6"), "target": _str("-1PR1"),
                     "target_title": _str("Принтер"), "target_port": _str("P1"),
                     "note": _str("примечание")}}}}},
+            "fields": {"type": "array", "description": "Листы коробок / внешних шкафов",
+                       "items": {"type": "object", "properties": {
+                "n": {"type": ["integer", "null"], "description": "номер зоны в текущем проекте"},
+                "zone": _str("+1KK1 / +ZM"), "sheet": _str("номер листа (обычно пусто)"),
+                "groups": {"type": "array", "items": {"type": "object", "properties": {
+                    "block": _str("клеммник: 1XT1"), "cable": _str("WIO-1ENC1"),
+                    "cable_ref": _str("+1KK1/2.0"), "cable_type": _str("FLEXICORE 135 CH 7G0,75"),
+                    "shield": {"type": "boolean"}, "pe": {"type": "boolean"},
+                    "paired": {"type": "boolean"}, "remote_device": _str("-CC_CPW"),
+                    "terms": {"type": "array", "items": {"type": "object", "properties": {
+                        "clamp": _str("L+, M, 1"), "core": _str("жила"),
+                        "remote": _str("+1KK1-XT1:L+ или вывод устройства"),
+                        "remote_ref": _str("+1KK1/2.0"),
+                        "dir": {"type": "string", "enum": ["in", "out"]},
+                        "wire": WIRE,
+                        "element": {"type": "string", "enum": ["", "катушка", "контакт", "ттр"]},
+                        "device": _str("-1K3"), "param": _str("=24В"),
+                        "link": _str("-CPU:A1, -2QFU1:1"), "ref": _str("ссылка вручную"),
+                        "caption": _str("подпись внизу, строки через \\n"),
+                        "bridge": _str("перемычка")}}}}}}}}},
+            "remove_field_groups": {"type": "array", "items": {"type": "string"},
+                                    "description": "«n:клеммник» — группы, которые удалить"},
             "remove_network_items": {"type": "array", "items": {"type": "string"},
                                      "description": "устройства (-ES2) или кабели (W001) удалить"},
             "remove_mains_items": {"type": "array", "items": {"type": "string"},
@@ -380,7 +412,8 @@ TOOL = {
     },
 }
 
-SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains", "network")
+SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains", "network",
+            "fields")
 
 
 class AssistantError(Exception):
@@ -390,7 +423,7 @@ class AssistantError(Exception):
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
 GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders"),
-          ("mains",), ("network",)]   # см. STAGES — порядок разбора
+          ("mains",), ("network",), ("fields",)]   # см. STAGES — порядок разбора
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
                "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
@@ -398,14 +431,17 @@ GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спец
                "mains": "ввод и питание 230 В (X0, QS1, шина N, автоматы SF с нагрузками, "
                         "БП, ИБП, батарея)",
                "network": "сеть: коммутаторы, ПК, панель, кабели Ethernet/USB/HDMI, "
-                          "панельные разъёмы"}
+                          "панельные разъёмы",
+               "fields": "коробки и внешние шкафы: полевые кабели, клеммники 1XT/2XT/3XT, "
+                         "реле CPW"}
 
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
     extra = {"spec": ["remove_spec_rows"], "terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
              "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"],
-             "mains": ["remove_mains_items"], "network": ["remove_network_items"]}
+             "mains": ["remove_mains_items"], "network": ["remove_network_items"],
+             "fields": ["remove_field_groups"]}
     keep = ["summary", "questions", "confirm", "resolved", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
@@ -431,6 +467,8 @@ def _call(api_key, current, message, sections, model, url, timeout,
           open_items=None) -> dict:
     names = ", ".join(GROUP_NAMES[s] for s in sections)
     ctx = {k: current.get(k) for k in ("project", *sections) if current.get(k)}
+    if ctx.get("fields"):                     # номера зон — чтобы править поштучно
+        ctx["fields"] = [{"n": i, **a} for i, a in enumerate(ctx["fields"], 1)]
     if ctx.get("spec"):                       # номера строк — чтобы править поштучно
         ctx["spec"] = [{"n": i, **row} for i, row in enumerate(ctx["spec"], 1)]
     ref = {k: current.get(k) for k in SECTIONS
@@ -494,13 +532,15 @@ def _call(api_key, current, message, sections, model, url, timeout,
                 allowed.add("remove_mains_items")
             if "network" in sections:
                 allowed.add("remove_network_items")
+            if "fields" in sections:
+                allowed.add("remove_field_groups")
             return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
 
 # Порядок разбора: сначала ПЛК, потом питание (зная, что нужно запитать), потом
 # клеммники и спецификация (зная всё остальное). Внутри этапа — параллельно.
-STAGES = [[("plc",)], [("mains",), ("network",)], [("power24", "feeders")],
+STAGES = [[("plc",)], [("mains",), ("network",), ("fields",)], [("power24", "feeders")],
           [("project", "spec"), ("terminals",)]]
 
 
@@ -591,6 +631,8 @@ def merge(current: dict, update: dict) -> dict:
             if idx is None:
                 items.append(new)
             else:
+                if sec == "plc" and items[idx].get("layout") and not new.get("layout"):
+                    new = {**new, "layout": items[idx]["layout"]}   # положение выводов — как было
                 items[idx] = new
         out[sec] = items
     pw_new = update.get("power24") or {}
@@ -631,6 +673,36 @@ def merge(current: dict, update: dict) -> dict:
                     items[idx] = n
             net[part] = items
         out["network"] = net
+    fl = update.get("fields") or []
+    rmf = {str(x).strip().upper() for x in update.get("remove_field_groups") or []}
+    if fl or rmf:
+        areas = [dict(a) for a in out.get("fields") or []]
+        for i, a in enumerate(areas, 1):
+            a["groups"] = [g for g in a.get("groups") or []
+                           if f"{i}:{_u(g.get('block'))}" not in rmf]
+        for a in fl:
+            a = dict(a)
+            try:
+                n = int(a.pop("n", None) or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if 1 <= n <= len(areas):
+                cur = areas[n - 1]
+                groups = list(cur.get("groups") or [])
+                for g in a.get("groups") or []:
+                    k = _u(g.get("block"))
+                    idx = next((j for j, x in enumerate(groups) if _u(x.get("block")) == k), None)
+                    if idx is None:
+                        groups.append(g)
+                    else:
+                        groups[idx] = g
+                cur["groups"] = groups
+                for key in ("zone", "sheet"):
+                    if a.get(key):
+                        cur[key] = a[key]
+            else:
+                areas.append(a)
+        out["fields"] = [a for a in areas if a.get("groups")]
     mn = update.get("mains") or {}
     rm = {str(x).strip().lstrip("-").upper() for x in update.get("remove_mains_items") or []}
     if mn or rm:
