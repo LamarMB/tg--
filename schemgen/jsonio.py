@@ -22,7 +22,45 @@ def doc_to_dict(doc: Document) -> dict:
         "feeders": [asdict(f) for f in doc.feeders or []],
         "mains": _mains_to_dict(doc.mains),
         "frozen": _frozen_to_list(doc.frozen),
+        "network": _net_to_dict(doc.network),
     }
+
+
+def _net_to_dict(net):
+    if not net:
+        return None
+    return {"devices": [{"tag": d.tag, "name": d.name, "brand": d.brand, "row": d.row,
+                         "ref": d.ref, "pe": d.pe, "modules": list(d.modules),
+                         "ports": [asdict(p) for p in d.ports],
+                         "power": [{"pin": w.pin, "link": w.link, "ref": w.ref,
+                                    "wire": _wire_obj(w.wire)} for w in d.power]}
+                        for d in net.devices],
+            "links": [asdict(l) for l in net.links]}
+
+
+def _dict_to_net(d):
+    from .e3.network import NetDevice, NetLink, NetPort, NetPower, Network
+    if not d:
+        return None
+    net = Network()
+    for x in d.get("devices") or []:
+        tag = _dash(x.get("tag"))
+        if not tag:
+            continue
+        net.devices.append(NetDevice(
+            tag, _s(x.get("name")), _s(x.get("brand")).lower(),
+            "bottom" if _s(x.get("row")).lower() in ("bottom", "низ", "нижний") else "top",
+            _s(x.get("ref")),
+            [NetPort(_s(p.get("name")), _s(p.get("kind")).lower() or "rj45",
+                     "bottom" if _s(p.get("side")).lower() in ("bottom", "низ", "снизу") else "top")
+             for p in x.get("ports") or [] if _s(p.get("name"))],
+            [NetPower(_s(w.get("pin")), _dash(w.get("link")), _s(w.get("ref")), _wire(w.get("wire")))
+             for w in x.get("power") or [] if _s(w.get("pin"))],
+            bool(x.get("pe")), [_s(m) for m in x.get("modules") or [] if _s(m)]))
+    fields = NetLink.__dataclass_fields__
+    for l in d.get("links") or []:
+        net.links.append(NetLink(**{k: _s(v) for k, v in l.items() if k in fields}))
+    return net if net else None
 
 
 def _frozen_to_list(fr):
@@ -241,7 +279,7 @@ def dict_to_doc(d: dict) -> Document:
             plc.append(mod)
     return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
                     _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")),
-                    _frozen_from(d.get("frozen")))
+                    _frozen_from(d.get("frozen")), _dict_to_net(d.get("network")))
 
 
 def _frozen_from(items):

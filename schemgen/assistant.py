@@ -141,6 +141,15 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    Ветви mains — только нагрузки внутри шкафа (розетка шкафа, вентилятор, свет, БП).
    Потребители вне шкафа — отходящие линии feeders: на листе ввода для них только
    стрелка к их автомату («стрелка», link -QF1:1) или выход QS.
+6г. Сеть (network): устройства (devices: tag -ES2/-PC1/-CPU/-OP1, name — модель,
+   brand moxa/inovance/ifc или пусто, row top/bottom — верхний/нижний ряд, ports: name
+   (1, 2, LAN A, HDMI, USB3.0 1), kind rj45/lan/usb/usb2/hdmi, side top/bottom; power:
+   pin V+/V-/+24V/0V, link -1QFU2:1, wire; pe; modules — «A1 GL20-1600END /8.0») и
+   кабели (links: cable W001, cable_type «S/FTP, CAT6A», length «1 м», a «-ES2:1»,
+   b — второй конец на листе «-PC1:LAN A», либо наружу: socket XETH1 (socket_kind
+   RJ45 / USB A), zone +1KK1/+ZM, remote «+1KK1-XETH1:RJ45», remote_ref, remote_cable
+   WET-1CM1, remote_cable_type, target -1PR1 + target_title «Принтер» + target_port P1).
+   Правка: устройство или кабель целиком; удалённые — в remove_network_items (tag / кабель).
 7. Открытые пункты. Если в запросе перечислены открытые пункты (вопросы и допущения
    с номерами), сообщение пользователя может быть ответом на них («1 да», «3 — реле
    на 230 В», «всё ок»). Внеси изменения по ответу, номера закрытых пунктов верни в
@@ -286,6 +295,34 @@ TOOL = {
                         "top": {"type": "boolean", "description": "вывод сверху блока"},
                         "link": _str("куда провод: -X0.3:1L+"), "ref": _str("ссылка вручную"),
                         "wire": WIRE}}}}}}}},
+            "network": {"type": "object", "description": "Лист «Сеть»", "properties": {
+                "devices": {"type": "array", "items": {"type": "object", "properties": {
+                    "tag": _str("-ES2, -PC1, -CPU"), "name": _str("модель: EDS-208"),
+                    "brand": _str("логотип: moxa / inovance / ifc / пусто"),
+                    "row": {"type": "string", "enum": ["top", "bottom"]},
+                    "ref": _str("ссылка на подробный лист: /6.1"),
+                    "pe": {"type": "boolean"},
+                    "modules": {"type": "array", "items": {"type": "string"},
+                                "description": "модули рядом: «A1 GL20-1600END /8.0»"},
+                    "ports": {"type": "array", "items": {"type": "object", "properties": {
+                        "name": _str("1, LAN A, HDMI, USB3.0 1"),
+                        "kind": {"type": "string", "enum": ["rj45", "lan", "usb", "usb2", "hdmi"]},
+                        "side": {"type": "string", "enum": ["top", "bottom"]}}}},
+                    "power": {"type": "array", "items": {"type": "object", "properties": {
+                        "pin": _str("V+, V-, +24V, 0V"), "link": _str("-1QFU2:1"),
+                        "ref": _str("ссылка вручную"), "wire": WIRE}}}}}},
+                "links": {"type": "array", "items": {"type": "object", "properties": {
+                    "cable": _str("W001"), "cable_type": _str("S/FTP, CAT6A"),
+                    "length": _str("1 м"), "a": _str("-ES2:1"),
+                    "b": _str("второй конец на листе: -PC1:LAN A"),
+                    "socket": _str("панельный разъём: XETH1"), "socket_kind": _str("RJ45 / USB A"),
+                    "zone": _str("+1KK1 / +ZM"), "remote": _str("+1KK1-XETH1:RJ45"),
+                    "remote_ref": _str("+1KK1/3.1"), "remote_cable": _str("WET-1CM1"),
+                    "remote_cable_type": _str("F/UTP CAT6"), "target": _str("-1PR1"),
+                    "target_title": _str("Принтер"), "target_port": _str("P1"),
+                    "note": _str("примечание")}}}}},
+            "remove_network_items": {"type": "array", "items": {"type": "string"},
+                                     "description": "устройства (-ES2) или кабели (W001) удалить"},
             "remove_mains_items": {"type": "array", "items": {"type": "string"},
                                    "description": "что удалить с листа ввода: -SF2, -UPS, "
                                                   "QS:4, N:N3"},
@@ -343,7 +380,7 @@ TOOL = {
     },
 }
 
-SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains")
+SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains", "network")
 
 
 class AssistantError(Exception):
@@ -353,20 +390,22 @@ class AssistantError(Exception):
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
 GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders"),
-          ("mains",)]   # см. STAGES — порядок разбора
+          ("mains",), ("network",)]   # см. STAGES — порядок разбора
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
                "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
                "feeders": "отходящие линии 230 В (QF, клеммы, кабели, розетки)",
                "mains": "ввод и питание 230 В (X0, QS1, шина N, автоматы SF с нагрузками, "
-                        "БП, ИБП, батарея)"}
+                        "БП, ИБП, батарея)",
+               "network": "сеть: коммутаторы, ПК, панель, кабели Ethernet/USB/HDMI, "
+                          "панельные разъёмы"}
 
 
 def _tool_for(sections) -> dict:
     props = TOOL["input_schema"]["properties"]
     extra = {"spec": ["remove_spec_rows"], "terminals": ["remove_terminal_blocks"], "plc": ["remove_plc_modules"],
              "power24": ["remove_power24_groups"], "feeders": ["remove_feeders"],
-             "mains": ["remove_mains_items"]}
+             "mains": ["remove_mains_items"], "network": ["remove_network_items"]}
     keep = ["summary", "questions", "confirm", "resolved", *sections, *[x for s in sections for x in extra.get(s, [])]]
     return {"name": "save_project", "description": TOOL["description"],
             "input_schema": {"type": "object", "required": ["summary"],
@@ -453,13 +492,15 @@ def _call(api_key, current, message, sections, model, url, timeout,
                 allowed.add("remove_feeders")
             if "mains" in sections:
                 allowed.add("remove_mains_items")
+            if "network" in sections:
+                allowed.add("remove_network_items")
             return {k: v for k, v in out.items() if k in allowed}
     raise AssistantError("Модель не вернула проект, попробуйте переформулировать.")
 
 
 # Порядок разбора: сначала ПЛК, потом питание (зная, что нужно запитать), потом
 # клеммники и спецификация (зная всё остальное). Внутри этапа — параллельно.
-STAGES = [[("plc",)], [("mains",)], [("power24", "feeders")],
+STAGES = [[("plc",)], [("mains",), ("network",)], [("power24", "feeders")],
           [("project", "spec"), ("terminals",)]]
 
 
@@ -574,6 +615,22 @@ def merge(current: dict, update: dict) -> dict:
                              if str(b.get("tag", "")).strip().lstrip("-").upper()
                              not in {x.lstrip("-") for x in rm}]
         out["power24"] = pw
+    nw = update.get("network") or {}
+    rmn = {_u(x) for x in update.get("remove_network_items") or []}
+    if nw or rmn:
+        net = dict(out.get("network") or {})
+        for part, key in (("devices", lambda d: _u(d.get("tag"))),
+                          ("links", lambda l: _u(l.get("cable")))):
+            items = [x for x in net.get(part) or [] if key(x) not in rmn]
+            for n in nw.get(part) or []:
+                k = key(n)
+                idx = next((i for i, x in enumerate(items) if key(x) == k), None)
+                if idx is None:
+                    items.append(n)
+                else:
+                    items[idx] = n
+            net[part] = items
+        out["network"] = net
     mn = update.get("mains") or {}
     rm = {str(x).strip().lstrip("-").upper() for x in update.get("remove_mains_items") or []}
     if mn or rm:

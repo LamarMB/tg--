@@ -367,3 +367,79 @@ def write_mains(wb, m, header) -> None:
             dev(b.device)
     for d in m.devices:
         dev(d)
+
+
+# ------------------------------------------------------------ Сеть
+N_COLS = ["Тип", "Устройство", "Имя", "Вид", "Сторона", "Связь", "Ссылка",
+          "Марка провода", "Цвет", "Сечение"]
+L_COLS = ["Кабель", "Марка", "Длина", "Откуда", "Куда", "Разъём", "Вид разъёма", "Зона",
+          "Удалённый конец", "Ссылка", "Кабель дальше", "Марка дальше", "Устройство",
+          "Название устройства", "Порт устройства", "Примечание"]
+
+
+def read_network(wb, find_sheet, table, problems):
+    from .network import NetDevice, NetLink, NetPort, NetPower, Network
+    ws = find_sheet(wb, "Сеть", False, problems)
+    wl = find_sheet(wb, "Кабели сети", False, problems)
+    if ws is None and wl is None:
+        return None
+    net = Network()
+    devs: dict[str, NetDevice] = {}
+    if ws is not None:
+        for rec in table(ws, N_COLS, problems):
+            kind = rec["Тип"].strip().lower()
+            tag = _t(rec["Устройство"])
+            if kind == "устройство":
+                d = devs[tag.upper()] = NetDevice(tag, rec["Имя"], rec["Вид"].strip().lower(),
+                                                  rec["Сторона"].strip().lower() or "top",
+                                                  rec["Ссылка"], pe=rec["Связь"].upper() == "PE")
+                net.devices.append(d)
+                continue
+            d = devs.get(tag.upper())
+            if d is None:
+                problems.append(f"Лист «Сеть»: «{tag}» не описано строкой «устройство».")
+                continue
+            if kind == "порт":
+                d.ports.append(NetPort(rec["Имя"], rec["Вид"].strip().lower() or "rj45",
+                                       rec["Сторона"].strip().lower() or "top"))
+            elif kind == "питание":
+                d.power.append(NetPower(rec["Имя"], rec["Связь"], rec["Ссылка"],
+                                        [rec["Марка провода"], rec["Цвет"], rec["Сечение"]]))
+            elif kind == "модуль":
+                d.modules.append(rec["Имя"])
+            else:
+                problems.append(f"Лист «Сеть»: тип «{rec['Тип']}» — нужно: устройство, порт, "
+                                "питание, модуль.")
+    if wl is not None:
+        for r in table(wl, L_COLS, problems):
+            net.links.append(NetLink(r["Кабель"], r["Марка"], r["Длина"], r["Откуда"], r["Куда"],
+                                     r["Разъём"], r["Вид разъёма"] or "RJ45", r["Зона"],
+                                     r["Удалённый конец"], r["Ссылка"], r["Кабель дальше"],
+                                     r["Марка дальше"], r["Устройство"],
+                                     r["Название устройства"].replace("\\n", "\n"),
+                                     r["Порт устройства"], r["Примечание"].replace("\\n", "\n")))
+    return net if net else None
+
+
+def write_network(wb, net, header) -> None:
+    ws = wb.create_sheet("Сеть")
+    header(ws, N_COLS, [12, 12, 36, 10, 9, 14, 8, 11, 7, 7])
+    wl = wb.create_sheet("Кабели сети")
+    header(wl, L_COLS, [9, 18, 8, 16, 16, 9, 10, 8, 20, 10, 12, 12, 11, 20, 10, 24])
+    if not net:
+        return
+    for d in net.devices:
+        ws.append(["устройство", d.tag, d.name, d.brand, d.row, "PE" if d.pe else "", d.ref,
+                   "", "", ""])
+        for p in d.ports:
+            ws.append(["порт", d.tag, p.name, p.kind, p.side, "", "", "", "", ""])
+        for pw in d.power:
+            w = (list(pw.wire) + ["", "", ""])[:3]
+            ws.append(["питание", d.tag, pw.pin, "", "", pw.link, pw.ref, *w])
+        for m in d.modules:
+            ws.append(["модуль", d.tag, m, "", "", "", "", "", "", ""])
+    for l in net.links:
+        wl.append([l.cable, l.cable_type, l.length, l.a, l.b, l.socket, l.socket_kind, l.zone,
+                   l.remote, l.remote_ref, l.remote_cable, l.remote_cable_type, l.target,
+                   l.target_title.replace("\n", "\\n"), l.target_port,
+                   l.note.replace("\n", "\\n")])

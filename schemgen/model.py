@@ -29,6 +29,7 @@ class Project:
     e3_power24_sheet: str = ""     # номер листа «Питание 24 В» (пусто — следующий по порядку)
     e3_feeders_sheet: str = ""     # номер листа «Отходящие линии 230 В»
     e3_mains_sheet: str = ""       # номер листа «Ввод и питание 230 В»
+    e3_network_sheet: str = ""     # номер листа «Сеть»
     litera: str = ""
     mass: str = ""
     scale: str = ""
@@ -87,3 +88,4 @@ class Document:
     feeders: list = field(default_factory=list)   # list[e3.power230.Feeder]
     mains: object = None                          # e3.mains.Mains
     frozen: list = field(default_factory=list)    # template.Frozen — листы из образца
+    network: object = None                        # e3.network.Network

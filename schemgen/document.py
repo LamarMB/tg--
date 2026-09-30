@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from . import template
-from .e3 import io_sheets, mains, power24, power230
+from .e3 import io_sheets, mains, network, power24, power230
 from .frame import draw_frame
 from .model import Document
 from .pen import Pen
@@ -51,7 +51,7 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
     # Документ Э3: титул + силовые листы + питание 24 В + листы ПЛК.
     # Сначала раскладываем все листы и регистрируем точки — потом рисуем,
     # чтобы ссылки между листами разных типов подставлялись сами.
-    if doc.plc or doc.power24 or doc.feeders or doc.mains or frozen:
+    if doc.plc or doc.power24 or doc.feeders or doc.mains or doc.network or frozen:
         xr = io_sheets.XRef()
         numbers, pages = [1], [title_page(pr)]
         nxt = 2
@@ -76,6 +76,11 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
             power24.register(p24_sheets, start(pr.e3_power24_sheet), xr)
             plan += [(sh.number, power24.painter(sh, xr)) for sh in p24_sheets]
             nxt = p24_sheets[-1].number + 1
+        n_sheets = network.layout(doc.network) if doc.network else []
+        if n_sheets:
+            nums = network.register(n_sheets, start(pr.e3_network_sheet), xr)
+            plan += [(n, network.painter(sh, xr)) for n, sh in zip(nums, n_sheets)]
+            nxt = nums[-1] + 1
         io_pages = io_sheets.layout(doc.plc) if doc.plc else []
         if io_pages:
             io_sheets.register(io_pages, start(pr.e3_first_io_sheet), xr)

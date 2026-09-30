@@ -191,6 +191,14 @@ def changed_keys(old: dict, new: dict) -> list[str]:
               "n_bus", "n_taps")
     if nm and any(om2.get(k) != nm.get(k) for k in simple):
         out.append(_k(nm.get("qs")) or "QS1")
+    # сеть: устройства и кабели
+    on, nn = old.get("network") or {}, new.get("network") or {}
+    odv = _by(on.get("devices"), lambda d: _k(d.get("tag")))
+    out += [t for t, d in _by(nn.get("devices"), lambda d: _k(d.get("tag"))).items()
+            if odv.get(t) != d]
+    olk = _by(on.get("links"), lambda l: _k(l.get("cable")))
+    out += ["-" + c.lstrip("-") for c, l in _by(nn.get("links"), lambda l: _k(l.get("cable"))).items()
+            if olk.get(c) != l]
     # спецификация: новые/изменённые строки — их обозначения
     osp = [dict(r) for r in old.get("spec") or []]
     for r in new.get("spec") or []:
