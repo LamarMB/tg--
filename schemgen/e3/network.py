@@ -160,13 +160,45 @@ def layout(net: Network) -> list[_Sheet]:
     return [_Sheet(net)] if net else []
 
 
+def _sided(net: Network) -> Network:
+    """Стороны портов по смыслу соединений (модель часто ставит их как попало):
+    кабель наружу от верхнего ряда — порт сверху; между рядами — навстречу друг другу;
+    два устройства нижнего ряда — оба порта сверху (под рядом места нет)."""
+    from dataclasses import replace
+    row = {_norm(d.tag): d.row for d in net.devices}
+    want: dict = {}
+    for l in net.links:
+        ta, pa = split_end(l.a)
+        tb, pb = split_end(l.b) if l.b else ("", "")
+        ra, rb = row.get(ta), row.get(tb)
+        if ra is None:
+            continue
+        if rb is None:                                   # наружу
+            if ra == "top":
+                want[(ta, pa.upper())] = "top"
+        elif ra == rb == "bottom":
+            want[(ta, pa.upper())] = want[(tb, pb.upper())] = "top"
+        elif ra != rb:
+            want[(ta, pa.upper())] = "bottom" if ra == "top" else "top"
+            want[(tb, pb.upper())] = "bottom" if rb == "top" else "top"
+    if not want:
+        return net
+    devs = []
+    for d in net.devices:
+        t = _norm(d.tag)
+        ports = [replace(pt, side=want.get((t, pt.name.upper()), pt.side)) for pt in d.ports]
+        devs.append(replace(d, ports=ports))
+    return replace(net, devices=devs)
+
+
 def register(sheets: list[_Sheet], first: int, xr: XRef) -> list[int]:
     nums = []
     for i, sh in enumerate(sheets):
         sh.number = first + i
         nums.append(sh.number)
-        devs = _place_row([d for d in sh.net.devices if d.row == "top"], TOP_Y0, TOP_Y1) + \
-            _place_row([d for d in sh.net.devices if d.row != "top"], BOT_Y0, BOT_Y1)
+        net = _sided(sh.net)
+        devs = _place_row([d for d in net.devices if d.row == "top"], TOP_Y0, TOP_Y1) + \
+            _place_row([d for d in net.devices if d.row != "top"], BOT_Y0, BOT_Y1)
         for pd in devs:
             xr.point(pd.d.tag, sh.number, (pd.x0 + pd.x1) / 2)
             for name, (x, _, _, _) in pd.ports.items():
@@ -177,7 +209,7 @@ def register(sheets: list[_Sheet], first: int, xr: XRef) -> list[int]:
 # ------------------------------------------------------------------ рисование
 def painter(sh: _Sheet, xr: XRef):
     def draw(p: Pen) -> None:
-        net = sh.net
+        net = _sided(sh.net)
         devs = _place_row([d for d in net.devices if d.row == "top"], TOP_Y0, TOP_Y1) + \
             _place_row([d for d in net.devices if d.row != "top"], BOT_Y0, BOT_Y1)
         by_tag = {_norm(pd.d.tag): pd for pd in devs}

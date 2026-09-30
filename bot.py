@@ -371,7 +371,9 @@ class Bot:
         saved = self.load_state(chat)
         current = {k: v for k, v in (pending or saved).items() if k != "_open"}
         open_items = (pending or {}).get("_open") or []
-        self.api.send_message(chat, "Принял, рисую черновик — это займёт 1–3 минуты…", mid)
+        big = self._model_for(current, text) != self.claude_model
+        self.api.send_message(chat, "Принял, разбираю и проверяю — это займёт "
+                              + ("3–6 минут…" if big else "1–3 минуты…"), mid)
         self.api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
         try:
             update = assistant.ask(self.claude_key, current, text,

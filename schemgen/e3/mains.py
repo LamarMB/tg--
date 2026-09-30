@@ -114,6 +114,11 @@ class _Sheet:
 def _br_step(b: Branch) -> float:
     if b.device and b.load.startswith("устр"):
         return max(BR_STEP, _dev_width(b.device) + 10.0)
+    kind = b.load.lower()
+    if kind.startswith("стрел"):
+        return 80.0 if b.tag else 60.0            # только стрелка — узко
+    if kind.startswith("ламп") and not b.tag:
+        return 70.0
     return BR_STEP
 
 
@@ -128,7 +133,8 @@ def _branch_xs(branches: list[Branch]) -> list[float]:
 def _pack_branches(branches: list[Branch]) -> list[list[Branch]]:
     out, cur, x = [], [], BR_X0
     for b in branches:
-        if cur and x > BR_X1:
+        narrow = not b.tag and b.load.lower().startswith("стрел")
+        if cur and x > (1160.0 if narrow else BR_X1 + 10.0):   # не влезает до рамки
             out.append(cur)
             cur, x = [], BR_X0
         cur.append(b)
