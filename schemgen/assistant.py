@@ -13,6 +13,7 @@ import urllib.request
 
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-sonnet-5"
+BIG_MODEL = "claude-opus-5-5"          # первый разбор нового проекта / большое описание
 
 SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шкафы управления, ГОСТ 2.702, 2.710).
 Пользователь описывает проект шкафа свободным текстом (часто кратко, с жаргоном).
@@ -137,7 +138,10 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    стрелка (link), load_tag, load_param, n_link — откуда N нагрузки, -XN:N2),
    устройства с выводами (devices: tag -U1/-UPS/-GB1, title, param, pins: name, top,
    link, wire). Устройство, питаемое от ветви (load «устройство»), имеет тот же tag,
-   что load_tag ветви. Правка: присылай только изменённые поля и элементы — ветвь,
+   что load_tag ветви. Отдельная сигнальная лампа (например -H1 «Сеть» от выхода QS) —
+   устройство devices: tag -H1, title «Лампа», param «AC230V белая», pins X1 (фаза,
+   link на выход QS) и X2 (link на -XN:Nx). Каждый вывод устройства — в свою точку:
+   L — к фазе, N — к нейтрали, PE — к -XPE, у батареи + и − — к разным выводам ИБП. Правка: присылай только изменённые поля и элементы — ветвь,
    устройство, выход QS, отвод N — каждый целиком; удалённые — в remove_mains_items
    (обозначение автомата/устройства, «QS:4» для выхода, «N:N3» для отвода).
    Ветви mains — только нагрузки внутри шкафа (розетка шкафа, вентилятор, свет, БП).
@@ -497,6 +501,39 @@ def _unwrap(out: dict) -> dict:
     return out
 
 
+_NO_FORCED_TOOL: set = set()
+
+
+class _ToolChoiceUnsupported(Exception):
+    pass
+
+
+def _auto_tool(body: dict) -> None:
+    body["tool_choice"] = {"type": "auto"}
+    body["messages"][0]["content"] += ("\n\nОтвет — только вызовом инструмента "
+                                       "save_project, без текста.")
+
+
+def _post(url, api_key, body, timeout) -> dict:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
+        "x-api-key": api_key, "anthropic-version": "2023-06-01",
+        "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read()).get("error", {}).get("message", "")
+        except Exception:
+            msg = ""
+        if e.code == 400 and "tool_choice" in msg:
+            raise _ToolChoiceUnsupported(msg) from e
+        raise AssistantError(f"Claude API ответил ошибкой {e.code}: {msg}") from e
+    except urllib.error.URLError as e:
+        raise AssistantError(f"Нет связи с api.anthropic.com: {e.reason}. "
+                             "Из России нужен VPN.") from e
+
+
 def _call(api_key, current, message, sections, model, url, timeout,
           open_items=None) -> dict:
     names = ", ".join(GROUP_NAMES[s] for s in sections)
@@ -530,21 +567,14 @@ def _call(api_key, current, message, sections, model, url, timeout,
         "tool_choice": {"type": "tool", "name": "save_project"},
         "messages": [{"role": "user", "content": user}],
     }
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
-        "x-api-key": api_key, "anthropic-version": "2023-06-01",
-        "content-type": "application/json"})
+    if model in _NO_FORCED_TOOL:
+        _auto_tool(body)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            res = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        try:
-            msg = json.loads(e.read()).get("error", {}).get("message", "")
-        except Exception:
-            msg = ""
-        raise AssistantError(f"Claude API ответил ошибкой {e.code}: {msg}") from e
-    except urllib.error.URLError as e:
-        raise AssistantError(f"Нет связи с api.anthropic.com: {e.reason}. "
-                             "Из России нужен VPN.") from e
+        res = _post(url, api_key, body, timeout)
+    except _ToolChoiceUnsupported:
+        _NO_FORCED_TOOL.add(model)            # модель не умеет «только инструмент»
+        _auto_tool(body)
+        res = _post(url, api_key, body, timeout)
     if res.get("stop_reason") == "max_tokens":
         raise AssistantError(f"Раздел «{names}» получился слишком большим для одного "
                              "ответа модели — пришлите описание этого раздела частями.")
@@ -580,7 +610,8 @@ STAGES = [[("plc",)], [("mains",), ("network",), ("fields",), ("column",)],
 
 
 def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
-        url: str = API_URL, timeout: float = 600, open_items=None) -> dict:
+        url: str = API_URL, timeout: float = 600, open_items=None,
+        check_fix: bool = True) -> dict:
     """Разбирает сообщение; возвращает изменённые разделы + summary/questions/
     confirm (допущения на подтверждение)/resolved (закрытые открытые пункты)."""
     from concurrent.futures import ThreadPoolExecutor
@@ -614,10 +645,63 @@ def ask(api_key: str, current: dict, message: str, model: str = DEFAULT_MODEL,
                     result[k] = v
             work = merge(work, {k: v for k, v in part.items()
                                 if k not in ("summary", "questions", "confirm", "resolved")})
+    if check_fix:
+        work = _check_and_fix(api_key, work, message, model, url, timeout, open_items,
+                              result, current or {})
+        result["_merged"] = work
     _guard_articles(result, current or {}, message)
     result["questions"] = result["questions"][:8]
-    result["confirm"] = result["confirm"][:12]
+    result["confirm"] = result["confirm"][:15]
     return result
+
+
+def _group_of(section: str):
+    return next((g for g in GROUPS if section in g), None)
+
+
+def _check_and_fix(api_key, work, message, model, url, timeout, open_items, result,
+                   before: dict) -> dict:
+    """Автопроверка разобранного проекта; найденные ошибки — модели на исправление
+    (один проход), что осталось — на подтверждение оранжевыми метками. Ошибки, которые
+    были и до этой правки (в принятом проекте), не трогаем."""
+    from concurrent.futures import ThreadPoolExecutor
+    from . import check
+    old = {i.text for i in check.check(before)} if before else set()
+    issues = [i for i in check.check(work) if i.text not in old]
+    if not issues:
+        return work
+    by_group: dict = {}
+    for i in issues:
+        g = _group_of(i.section)
+        if g:
+            by_group.setdefault(g, []).append(i)
+    fix_msg = (message + "\n\n=== АВТОПРОВЕРКА ===\nПроект уже разобран по сообщению выше "
+               "(он в «Текущем проекте»). Проверка нашла ошибки — исправь их в своих "
+               "разделах, присылая исправленные объекты целиком. Остальное не трогай. "
+               "Если исправить нельзя без данных от пользователя — добавь пункт в confirm "
+               "с ключом-обозначением.\n")
+    with ThreadPoolExecutor(max(1, len(by_group))) as ex:
+        futs = {g: ex.submit(_call, api_key, work, fix_msg + check.report(lst), g, model, url,
+                             timeout, open_items) for g, lst in by_group.items()}
+        parts = []
+        for g, f in futs.items():
+            try:
+                parts.append(f.result())
+            except AssistantError:
+                continue                          # не вышло исправить — останется метка
+    for part in parts:
+        upd = {k: v for k, v in part.items()
+               if k not in ("summary", "questions", "confirm", "resolved")}
+        if upd:
+            work = merge(work, upd)
+        result["confirm"] += [c for c in part.get("confirm") or [] if isinstance(c, dict)
+                              and str(c.get("text") or "").strip()]
+        result["questions"] += [q for q in part.get("questions") or []
+                                if q and q not in result["questions"]]
+    for i in check.check(work):
+        if i.text not in old:
+            result["confirm"].append({"key": i.key, "text": "Проверка: " + i.text})
+    return work
 
 
 def _guard_articles(result: dict, current: dict, message: str) -> None:

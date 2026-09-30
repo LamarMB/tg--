@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from reportlab.lib.colors import white
 
-from ..pen import ASSETS, PAGE_H, Pen, text_width
+from ..pen import ASSETS, PAGE_H, Pen, text_width, wrap
 from . import symbols as S
 from .io_sheets import XRef, split_link
 
@@ -137,7 +137,8 @@ def _place_row(devs: list[NetDevice], y0: float, y1: float) -> list[_Dev]:
         top = [p for p in d.ports if p.side == "top"]
         bot = [p for p in d.ports if p.side != "top"]
         left = x + ((40.0 + 25.0 * len(d.power)) if d.power else 90.0) * scale
-        step = min(PORT_STEP, (w - (left - x) - 20.0) / max(len(top), len(bot), 1))
+        mods = (26.0 * len(d.modules) + 10.0) * scale if d.modules else 0.0
+        step = min(PORT_STEP, (w - (left - x) - 20.0 - mods) / max(len(top), len(bot), 1))
         for i, p in enumerate(top):
             pd.ports[p.name.upper()] = (left + step * (i + 0.5), y0 + 22.7, "top", p)
         for i, p in enumerate(bot):
@@ -349,12 +350,13 @@ def _cable_label(p: Pen, x, y, l: NetLink):
         return
     tag = f"-{l.cable.lstrip('-')}" if l.cable else ""
     p.text(x - 4.0, y - 22.0, tag, 10.6, "right")
-    p.text(x - 4.0, y - 11.0, l.cable_type, 7.7, "right")
+    p.text(x - 4.0, y - 11.0, l.cable_type, 7.7, "right", max_width=50.0)
     p.text(x - 4.0, y - 1.5, l.length, 7.7, "right")
     p.hline(x - 25.0, x + 25.0, y + 3.5, 0.71)
     if l.note:
-        for i, ln in enumerate(l.note.split("\n")):
-            p.text(x - 4.0, y + 12.0 + 9.2 * i, ln, 7.7, "right")
+        lines = [w for part in l.note.split("\n") for w in wrap(part, 48.0, 6.5)][:3]
+        for i, ln in enumerate(lines):
+            p.text(x - 4.0, y + 12.0 + 8.0 * i, ln, 6.5, "right", max_width=48.0)
 
 
 def _socket(p: Pen, x, y, name: str, kind: str, note: str = ""):
@@ -373,9 +375,10 @@ def _socket(p: Pen, x, y, name: str, kind: str, note: str = ""):
 
 
 def _links(p: Pen, links: list[NetLink], by_tag: dict, xr: XRef):
-    lanes = {"mid": 548.0, "low": 845.0}
-    lane_used = {"mid": 0, "low": 0}
+    lanes = {"mid": 548.0}
+    lane_used = {"mid": 0, "low": 0, "over": 0}
     zones: dict[str, list[float]] = {}
+    sockets: list = []
     ext_used = [0]
     for l in links:
         ta, pa = split_end(l.a)
@@ -391,14 +394,16 @@ def _links(p: Pen, links: list[NetLink], by_tag: dict, xr: XRef):
         if other and other.ports.get(pb.upper()):
             x2, y2, side2, _ = other.ports[pb.upper()]
             # маршрут: от порта наружу до дорожки, по горизонтали, к второму порту
-            if side == "bottom" and side2 == "bottom":
-                lane = "mid" if dev.d.row == "top" and other.d.row == "top" else "low"
+            if side == "top" and side2 == "top" and dev.d.row == other.d.row:
+                # оба порта сверху, один ряд — над устройствами
+                ly = min(dev.y0, other.y0) - 22.0 - 12.0 * lane_used["over"]
+                lane_used["over"] += 1
+            elif side == "bottom" and side2 == "bottom":
+                ly = min(max(dev.y1, other.y1) + 30.0 + 12.0 * lane_used["low"], 800.0)
+                lane_used["low"] += 1
             else:
-                lane = "mid" if dev.d.row != other.d.row else "low"
-            ly = lanes[lane] + 12.0 * lane_used[lane]
-            if dev.d.row == "top" and other.d.row == "top" and side == "bottom":
-                ly = max(dev.y1, other.y1) + 60.0 + 12.0 * lane_used[lane]
-            lane_used[lane] += 1
+                ly = lanes["mid"] + 12.0 * lane_used["mid"]
+                lane_used["mid"] += 1
             ya = y + (-16.0 if side == "top" else 17.6)
             yb = y2 + (-16.0 if side2 == "top" else 17.6)
             p.vline(x, min(ya, ly), max(ya, ly), LW_NET)
@@ -422,8 +427,8 @@ def _links(p: Pen, links: list[NetLink], by_tag: dict, xr: XRef):
             p.vline(x, top_end, y - 15.6 + 4.0, LW_NET)
         _cable_label(p, x, 348.0, l)
         if l.socket:
-            _socket(p, x, SOCKET_Y, l.socket, l.socket_kind or "RJ45",
-                    "" if (l.zone or l.target or l.remote) else "Панельный разъем")
+            sockets.append((x, l.socket, l.socket_kind or "RJ45",
+                            "" if (l.zone or l.target or l.remote) else "Панельный разъем"))
         if l.zone:
             zones.setdefault(l.zone, []).append(x)
         if l.target or l.remote or l.remote_cable:
@@ -440,6 +445,13 @@ def _links(p: Pen, links: list[NetLink], by_tag: dict, xr: XRef):
                 p.text(x - 4.0, 145.0, lk, 7.7, rotate=90)
                 if rf:
                     p.text(x + 5.0, 145.0, rf, 7.7, rotate=90)
+    # панельные разъёмы: пояснение «Панельный разъем» — только если справа есть место
+    xs_all = sorted(x for x, *_ in sockets)
+    for x, name, kind, note in sockets:
+        right = [o for o in xs_all if o > x + 0.1]
+        if note and right and right[0] - x < 62.0:
+            note = ""
+        _socket(p, x, SOCKET_Y, name, kind, note)
     # зоны: пунктирная рамка вокруг удалённых концов, соседние не перекрываются
     order = sorted(zones.items(), key=lambda kv: min(kv[1]))
     bounds = []

@@ -151,7 +151,15 @@ def layout(m: Mains) -> list[_Sheet]:
     return sheets
 
 
+def _is_lamp(d: Device) -> bool:
+    """Одиночная сигнальная лампа (-H1 «Сеть»): рисуем символом, а не блоком."""
+    t = d.tag.lstrip("-").upper()
+    return (t.startswith("H") or "ЛАМП" in d.title.upper()) and len(d.pins) <= 2
+
+
 def _dev_width(d: Device) -> float:
+    if _is_lamp(d):
+        return 60.0
     top = sum(1 for p in d.pins if p.top)
     bot = len(d.pins) - top
     return max(120.0, 34.0 * max(top, bot, 1) + 40.0)
@@ -421,6 +429,9 @@ def _load(p: Pen, b: Branch, x: float, y: float, xr: XRef) -> None:
 def _device(p: Pen, d: Device, x0: float, y0: float, xr: XRef,
             feed_pin_x: float | None = None) -> None:
     """Блок устройства с выводами сверху и снизу; у свободных выводов — провода-стрелки."""
+    if _is_lamp(d):
+        _lamp_device(p, d, x0, y0, xr)
+        return
     top = [pn for pn in d.pins if pn.top]
     bot = [pn for pn in d.pins if not pn.top]
     w = _dev_width(d)
@@ -455,3 +466,30 @@ def _device(p: Pen, d: Device, x0: float, y0: float, xr: XRef,
             _lbl_arrow_down(p, x, tip, lk, rf)
             if pn.wire and any(pn.wire):
                 S.wire_mark(p, x, y0 + h + 22.0, [w for w in pn.wire if w])
+
+
+def _lamp_device(p: Pen, d: Device, x0: float, y0: float, xr: XRef) -> None:
+    """Лампа: вывод x2 сверху, x1 снизу, провода — стрелками со ссылками."""
+    x, yl = x0 + 40.0, y0 + 40.0
+    S.lamp(p, x, yl, d.tag if d.tag.startswith("-") else f"-{d.tag}",
+           d.param or d.title)
+    pins = list(d.pins) + [Pin("")] * (2 - len(d.pins))
+    # верхний вывод — «x2»/«X2»/второй, нижний — «x1»/первый
+    up = next((pn for pn in pins if pn.name.upper() == "X2"), pins[1])
+    down = next((pn for pn in pins if pn is not up), pins[0])
+    for pn, sign in ((up, -1), (down, 1)):
+        lk, rf = split_link(pn.link, pn.ref, xr)
+        if not (lk or (pn.wire and any(pn.wire))):
+            continue
+        if sign < 0:
+            tip = yl - 45.0
+            p.vline(x, tip + 7.8, yl, S.LW)
+            _lbl_arrow_up(p, x, tip, lk, rf)
+            if pn.wire and any(pn.wire):
+                S.wire_mark(p, x, yl - 20.0, [w for w in pn.wire if w])
+        else:
+            tip = yl + 11.4 + 45.0
+            p.vline(x, yl + 11.4, tip - 7.8, S.LW)
+            _lbl_arrow_down(p, x, tip, lk, rf)
+            if pn.wire and any(pn.wire):
+                S.wire_mark(p, x, yl + 30.0, [w for w in pn.wire if w])

@@ -172,6 +172,7 @@ class Bot:
         self.allowed = allowed
         self.claude_key = claude_key
         self.claude_model = claude_model
+        self.claude_model_big = os.environ.get("CLAUDE_MODEL_BIG", assistant.BIG_MODEL)
         self.claude_url = claude_url
         self.state_dir = state_dir
         self._locks: dict[int, threading.Lock] = {}
@@ -339,7 +340,7 @@ class Bot:
             return
         try:
             assistant.ask(key, {}, "проверка связи: шифр ТЕСТ", self.claude_model,
-                          self.claude_url, timeout=120)
+                          self.claude_url, timeout=120, check_fix=False)
         except assistant.AssistantError as e:
             self.api.send_message(chat, f"Ключ не подошёл: {e}", mid)
             return
@@ -351,6 +352,14 @@ class Bot:
             pass
         self.api.send_message(chat, "Ключ Claude API сохранён (сообщение с ним удалил). "
                                     "Теперь можно описывать проект текстом.")
+
+    def _model_for(self, current: dict, text: str) -> str:
+        """Новый проект или большое описание — сильная модель; мелкие правки — обычная."""
+        empty = not any(current.get(k) for k in ("plc", "mains", "power24", "network",
+                                                   "fields", "feeders"))
+        if empty or len(text) > 1500:
+            return self.claude_model_big or self.claude_model
+        return self.claude_model
 
     def on_text(self, chat: int, mid: int, text: str) -> None:
         if not self.claude_key:
@@ -365,12 +374,13 @@ class Bot:
         self.api.send_message(chat, "Принял, рисую черновик — это займёт 1–3 минуты…", mid)
         self.api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
         try:
-            update = assistant.ask(self.claude_key, current, text, self.claude_model,
-                                   self.claude_url, open_items=open_items)
+            update = assistant.ask(self.claude_key, current, text,
+                                   self._model_for(current, text), self.claude_url,
+                                   open_items=open_items)
         except assistant.AssistantError as e:
             self.api.send_message(chat, str(e), mid)
             return
-        merged = assistant.merge(current, update)
+        merged = update.pop("_merged", None) or assistant.merge(current, update)
         document = dict_to_doc(merged)
         # открытые пункты: старые без закрытых + новые допущения и вопросы
         closed = set(update.get("resolved") or [])

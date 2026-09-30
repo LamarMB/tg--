@@ -157,7 +157,10 @@ class BotFlow(unittest.TestCase):
             "questions": ["Артикул ПЛК?"],
             "confirm": [{"key": "-CPU:A2", "text": "реле K1 на входе A2"}],
             "project": {"code": "ВКС.ТЕСТ.1", "customer": "Заказчик"},
-            "spec": [{"designation": "CPU", "name": "Контроллер", "qty": "1"}],
+            "spec": [{"designation": "CPU", "name": "Контроллер", "qty": "1"},
+                     {"designation": "K1", "name": "Реле", "qty": "1"},
+                     {"designation": "XT1", "name": "Клеммник", "qty": "1"}],
+            "terminals": [{"name": "XT1", "rows": [{"part_no": "1"}]}],
             "plc": [{"key": "CPU", "tag": "CPU", "type": "AM600", "kind": "in",
                      "channels": [
                          {"pin": "A1", "desc": "Датчик", "wire": ["CPU-DI0", "WH", "0,5"],
@@ -199,7 +202,7 @@ class BotFlow(unittest.TestCase):
                                                "name": "БП 24В"}]}
         self.bot.handle(self.msg(text="добавь блок питания U1"))
         self.bot.handle(self.ok("undo"))
-        self.assertEqual(len(self.bot.load_state(42)["spec"]), 1)
+        self.assertEqual(len(self.bot.load_state(42)["spec"]), 3)
         # правка -> принять; изменённое обведено синим
         FakeTelegram.sent = []
         self.bot.handle(self.msg(text="добавь блок питания U1"))
@@ -207,7 +210,7 @@ class BotFlow(unittest.TestCase):
         self.assertIn("Изменения".encode(), cap)
         self.bot.handle(self.ok())
         state = self.bot.load_state(42)
-        self.assertEqual(len(state["spec"]), 2)
+        self.assertEqual(len(state["spec"]), 4)
         self.assertEqual(len(state["plc"]), 1)
 
     def test_spec_partial_merge(self):
@@ -390,3 +393,27 @@ class TemplatePatches(unittest.TestCase):
             import pypdfium2 as pdfium
             texts = [pg.get_textpage().get_text_range() for pg in pdfium.PdfDocument(str(out))]
         self.assertTrue(any("-W999" in t for t in texts))
+
+
+class Check(unittest.TestCase):
+    def test_finds_typical_mistakes(self):
+        from schemgen import check
+        d = {"mains": {"devices": [
+                {"tag": "-GB1", "pins": [{"name": "+", "link": "-UPS:Battery"},
+                                         {"name": "-", "link": "-UPS:Battery"}]},
+                {"tag": "-UPS", "pins": [{"name": "Bat", "link": "-GB1"}]}],
+                "qs_outputs": [{"pole": "4", "link": "-H1:L"}], "qs": "QS1"},
+             "network": {"devices": [{"tag": "-PR1"}],
+                         "links": [{"cable": "W6", "a": "-PR1:1", "target": "-PR1"}]},
+             "spec": [{"designation": "GB1"}]}
+        text = check.report(check.check(d))
+        self.assertIn("-GB1 выводы +, -", text)
+        self.assertIn("-H1", text)
+        self.assertIn("-PR1 нарисован дважды", text)
+        self.assertIn("Нет в спецификации", text)
+        self.assertNotIn("GB1,", text.split("Нет в спецификации")[1][:30])
+
+    def test_spec_ranges(self):
+        from schemgen.check import expand
+        self.assertEqual(expand("K1...K3; 1XT1…1XT2, SB1"),
+                         {"K1", "K2", "K3", "1XT1", "1XT2", "SB1"})
