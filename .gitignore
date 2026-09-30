@@ -5,3 +5,4 @@ __pycache__/
 !examples/*.pdf
 .venv/
 data/
+assets/templates/*.json

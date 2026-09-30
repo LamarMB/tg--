@@ -342,3 +342,51 @@ class Power24Sheet(unittest.TestCase):
                                                                   {"tag": "-2QFU8"}]}]}}
         out = merge(cur, {"remove_power24_groups": ["2QFU8"]})
         self.assertEqual([b["tag"] for b in out["power24"]["groups"][0]["breakers"]], ["-2QFU7"])
+
+
+class TemplatePatches(unittest.TestCase):
+    """Листы-шаблоны: правка надписи — лист остаётся образцом с заплаткой;
+    правка состава — лист рисует генератор."""
+
+    def _active(self, edit):
+        from schemgen import template
+        from schemgen.jsonio import dict_to_doc, doc_to_dict
+        d = doc_to_dict(read_document(EXAMPLE))
+        edit(d)
+        nd = dict_to_doc(json.loads(json.dumps(d)))
+        return {f.sheet: f for f in template.active(nd, nd.frozen)}
+
+    def test_text_edit_patched(self):
+        def edit(d):
+            for b in d["mains"]["branches"]:
+                if b.get("tag") == "-SF1":
+                    b["rating"] = "10A 'C'"
+        act = self._active(edit)
+        self.assertIn(2, act)
+        self.assertEqual([(p.text, p.align) for p in act[2].patches], [("10A 'C'", "right")])
+        self.assertEqual(act[3].patches, [])                     # другие листы — как были
+
+    def test_stacked_caption_and_rating(self):
+        def edit(d):
+            for g in d["power24"]["groups"]:
+                for b in g["breakers"]:
+                    if b["tag"] == "-1QFU6":
+                        b["caption"] = "Питание\nПК"
+        act = self._active(edit)
+        self.assertEqual([p.text for p in act[4].patches], ["Питание", "ПК"])
+
+    def test_structural_edit_uses_generator(self):
+        def edit(d):
+            d["mains"]["branches"].pop(0)
+        self.assertNotIn(2, self._active(edit))
+
+    def test_render_with_patch(self):
+        from schemgen.jsonio import dict_to_doc, doc_to_dict
+        d = doc_to_dict(read_document(EXAMPLE))
+        d["network"]["links"][0]["cable"] = "W999"
+        with tempfile.TemporaryDirectory() as t:
+            out = Path(t) / "o.pdf"
+            render_pdf(dict_to_doc(json.loads(json.dumps(d))), str(out))
+            import pypdfium2 as pdfium
+            texts = [pg.get_textpage().get_text_range() for pg in pdfium.PdfDocument(str(out))]
+        self.assertTrue(any("-W999" in t for t in texts))
