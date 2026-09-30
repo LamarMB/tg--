@@ -82,7 +82,7 @@ def render_pdf(doc: Document, path: str, marks=None, hits=None) -> int:
             nums = network.register(n_sheets, start(pr.e3_network_sheet), xr)
             plan += [(n, network.painter(sh, xr)) for n, sh in zip(nums, n_sheets)]
             nxt = nums[-1] + 1
-        io_pages = io_sheets.layout(doc.plc) if doc.plc else []
+        io_pages = io_sheets.layout(doc.plc, doc.column) if doc.plc else []
         if io_pages:
             io_sheets.register(io_pages, start(pr.e3_first_io_sheet), xr)
             plan += [(pg.number, io_sheets.painter(pg, xr)) for pg in io_pages]

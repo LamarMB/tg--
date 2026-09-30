@@ -24,7 +24,37 @@ def doc_to_dict(doc: Document) -> dict:
         "frozen": _frozen_to_list(doc.frozen),
         "network": _net_to_dict(doc.network),
         "fields": [_area_to_dict(a) for a in doc.fields or []],
+        "column": _col_to_dict(doc.column),
     }
+
+
+def _col_to_dict(col):
+    if not col:
+        return None
+    d = asdict(col)
+    d["feed_wire"], d["common_wire"] = _wire_obj(col.feed_wire), _wire_obj(col.common_wire)
+    for l in d["lamps"]:
+        l["wire"], l["relay_wire"] = _wire_obj(l["wire"]), _wire_obj(l["relay_wire"])
+    return d
+
+
+def _dict_to_col(d):
+    from .e3.column import ColLamp, Column
+    if not d:
+        return None
+    col = Column(_dash(d.get("tag")) or "-HL1", _s(d.get("title")), _wire(d.get("feed_wire")),
+                 _dash(d.get("feed_next")), _s(d.get("feed_next_ref")), [],
+                 _s(d.get("common_pin")) or "0", _dash(d.get("common_link")),
+                 _s(d.get("common_ref")), _wire(d.get("common_wire")))
+    for l in d.get("lamps") or []:
+        if not _s(l.get("pin")):
+            continue
+        rw = _wire(l.get("relay_wire"))
+        col.lamps.append(ColLamp(_s(l.get("pin")), _s(l.get("color")), _s(l.get("kind")) or "лампа",
+                                 _dash(l.get("relay")), _wire(l.get("wire")),
+                                 rw if any(rw) else [], _dash(l.get("via")),
+                                 _s(l.get("via_pins")) or "11/14/12", _s(l.get("via_ref"))))
+    return col if col else None
 
 
 def _area_to_dict(a) -> dict:
@@ -316,7 +346,7 @@ def dict_to_doc(d: dict) -> Document:
     return Document(project, spec, terms, plc, _dict_to_p24(d.get("power24")),
                     _dict_to_feeders(d.get("feeders")), _dict_to_mains(d.get("mains")),
                     _frozen_from(d.get("frozen")), _dict_to_net(d.get("network")),
-                    _dict_to_areas(d.get("fields")))
+                    _dict_to_areas(d.get("fields")), _dict_to_col(d.get("column")))
 
 
 def _frozen_from(items):

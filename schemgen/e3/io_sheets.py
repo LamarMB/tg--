@@ -87,6 +87,7 @@ class _Block:
     top: float                    # верх блока модуля
     x0: float = 0.0
     x1: float = 0.0
+    column: object = None         # e3.column.Column под этим блоком выходов
 
 
 @dataclass
@@ -138,7 +139,7 @@ OUT_TOPS = (82.3, 445.1)  # верх блоков выходов (две пол�
 MAX_IN = 18               # обычных выводов на лист входов
 
 
-def layout(modules: list[PlcModule]) -> list[_Page]:
+def layout(modules: list[PlcModule], column=None) -> list[_Page]:
     pages: list[_Page] = []
     out_blocks: list[_Block] = []
 
@@ -147,7 +148,7 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
         for i in range(0, len(out_blocks), 2):
             pair = out_blocks[i:i + 2]
             for k, b in enumerate(pair):
-                b.top = OUT_TOPS[k]
+                b.top = _hint(b.module, "top", OUT_TOPS[k])
             pages.append(_Page("out", pair))
         out_blocks = []
 
@@ -163,7 +164,7 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
                 special = [_Pos(c, last + 68.0 + 34.0 * i) for i, c in
                            enumerate(spec if j == len(chunks) - 1 else [])]
                 _apply_xs(m, regular + special)
-                b = _Block(m, regular, special, IN_TOP)
+                b = _Block(m, regular, special, _hint(m, "top", IN_TOP))
                 xs = [p.x for p in regular + special] or [136.1]
                 b.x0, b.x1 = min(xs) - 45.4, max(max(xs) + 25.5, b.x0 + 200)
                 pages.append(_Page("in", [b]))
@@ -191,6 +192,17 @@ def layout(modules: list[PlcModule]) -> list[_Page]:
                 b = _Block(m, regular, special, 0.0, 136.1, 1099.8)
                 out_blocks.append(b)
     flush_out()
+    if column:
+        from .column import relays
+        want = relays(column)
+        for pg in pages:
+            if pg.kind != "out" or len(pg.blocks) != 1:
+                continue
+            b = pg.blocks[0]
+            devs = {pos.ch.device.upper() for pos in b.regular if pos.ch.element == COIL}
+            if want and want <= devs:
+                b.column = column
+                break
     return pages
 
 
@@ -214,6 +226,11 @@ def register(pages: list[_Page], first_sheet: int, xr: XRef | None = None) -> XR
                     xr.contact(ch.device, "co", pg.number, pos.x)
                 elif ch.element in (BUTTON_NO, BUTTON_NC):
                     xr.contact(ch.device, "btn", pg.number, pos.x)
+            if b.column:
+                from .column import register as col_register
+                heads = [pos.x for pos in b.regular if pos.ch.element in (COIL, LAMP)]
+                if heads:
+                    col_register(b.column, pg.number, min(heads), xr)
     return xr
 
 
@@ -232,11 +249,36 @@ def _wire_lines(ch: PlcChannel) -> list[str]:
     return [w for w in ch.wire if w]
 
 
+def _hint(m: PlcModule, key: str, default: float) -> float:
+    try:
+        return float((m.layout or {}).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _stagger(labels: list[tuple[float, str]], size=8.5) -> set[int]:
+    """Подписи стрелок, которые налезают на соседнюю, поднимаем (через одну)."""
+    from ..pen import text_width
+    raised, last = set(), None
+    for i, (x, t) in enumerate(labels):
+        w = text_width(t, size) if t else 0.0
+        if last is not None and t:
+            lx, lw = last
+            if x - w / 2 < lx + lw / 2 + 12.0:
+                raised.add(i)
+                continue
+        if t:
+            last = (x, w)
+    return raised
+
+
 def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
     m, top = b.module, b.top
-    bottom = top + 170.1
+    h = _hint(m, "h", 170.1)
+    b.x0, b.x1 = _hint(m, "x0", b.x0), _hint(m, "x1", b.x1)
+    bottom = top + h
     p.rect(b.x0, top, b.x1, bottom, lw=1.42)
-    r1, r2 = top + 124.7, top + 147.4
+    r1, r2 = top + h - 45.4, top + h - 22.7
     p.line(b.x0, r1, b.x1, r1, 0.71, dash=([4, 3], 0))
     p.line(b.x0, r2, b.x1, r2, 0.71, dash=([4, 3], 0))
     cx = (b.x0 + b.x1) / 2
@@ -245,9 +287,14 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
     S.tag(p, b.x0 - 4.2, top + 3.6, f"-{m.tag}", m.ref)
 
     pin_y = top + 11.4            # где провод входит в символ вывода
-    mark_y = top - 34.0
+    mark_y = top - _hint(m, "mark", 34.0)
+    tip_y = _hint(m, "tip", 473.5)
+    desc_y = top + _hint(m, "desc", 45.3)
     bus_y, feed_y = 456.5, 365.8
     relay_x, button_x = [], []
+    plain = [(pos.x, split_link(pos.ch.link, pos.ch.ref, xr)[0]) for pos in b.regular
+             if not pos.ch.element and pos.ch.link]
+    raised_x = {plain[i][0] for i in _stagger(plain)}
 
     for pos in b.regular + b.special:
         ch, x = pos.ch, pos.x
@@ -255,16 +302,16 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
         p.text(x, top + 36.1, ch.pin, S.PIN, "center")
         step = 56.7 if pos in b.regular else 34.0
         p.anchor(f"{m.tag}:{ch.pin}", x - step / 2 + 3, top + 28.0, x + step / 2 - 3, top + 80.0)
-        S.centered_lines(p, x, top + 45.3 + (0 if pos in b.regular else 4.3), ch.desc, step - 1)
+        S.centered_lines(p, x, desc_y + (0 if pos in b.regular else 4.3), ch.desc, step - 1)
         wired = bool(_wire_lines(ch) or ch.element or ch.link)
         if not wired:
             continue
         el = ch.element
         if el == COMMON:
             i = b.special.index(pos)
-            yy = 490.5 + 22.7 * i
+            yy = _hint(m, "com_y", 490.5) + 22.7 * i
             S.wire(p, x, yy, pin_y)
-            tip = b.special[-1].x + 17.0
+            tip = b.special[-1].x + _hint(m, "com_dx", 17.0)
             p.hline(x, tip - 7.8, yy, S.LW)
             lk, rf = split_link(ch.link, ch.ref, xr)
             S.arrow_right(p, tip, yy, lk + (f"/{rf.lstrip('/')}" if rf else ""))
@@ -287,8 +334,17 @@ def _draw_in(p: Pen, b: _Block, xr: XRef) -> None:
             if m.feed_wire:
                 S.wire_mark(p, x, 388.5, m.feed_wire)
         else:
-            S.wire(p, x, 473.5, pin_y)
-            S.arrow_down(p, x, 473.5, *split_link(ch.link, ch.ref, xr), 8.5)
+            S.wire(p, x, tip_y, pin_y)
+            lk, rf = split_link(ch.link, ch.ref, xr)
+            if x in raised_x:                # подпись выше, чтобы не наехать на соседнюю
+                S.arrow_down(p, x, tip_y, "", "", 8.5)
+                base = tip_y - 11.3 - 4.0 - 19.8
+                if rf:
+                    p.text(x, base, rf, 8.5, "center")
+                    base -= 8.5 * 1.2
+                p.text(x, base, lk, 8.5, "center")
+            else:
+                S.arrow_down(p, x, tip_y, lk, rf, 8.5)
         if _wire_lines(ch):
             S.wire_mark(p, x, mark_y, _wire_lines(ch))
 
@@ -327,7 +383,8 @@ def _desc_rows(b: _Block, width_reg: float, width_spec: float) -> int:
 def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
     m, top = b.module, b.top
     rows = _desc_rows(b, 86.0, 60.0)
-    bottom = top + 136.1 + max(0, rows - 3) * 11.4
+    bottom = top + _hint(m, "h", 136.1 + max(0, rows - 3) * 11.4)
+    b.x0, b.x1 = _hint(m, "x0", b.x0), _hint(m, "x1", b.x1)
     p.rect(b.x0, top, b.x1, bottom, lw=1.13)
     r1, r2 = top + 22.7, top + 45.4
     p.line(b.x0, r1, b.x1, r1, 0.71, dash=([4, 3], 0))
@@ -338,18 +395,20 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
     S.tag(p, b.x0 - 10.1, top - 1.8, f"-{m.tag}", m.ref)
 
     wire_top = bottom - 11.4
-    mark_y = bottom + 33.9
-    coil_y = bottom + 62.3
-    bus_y = bottom + 102.0
-    ret_y = bottom + 136.0
+    mark_y = bottom + _hint(m, "mark", 33.9)
+    coil_y = bottom + _hint(m, "coil", 62.3)
+    bus_y = bottom + _hint(m, "bus", 102.0)
+    ret_y = bottom + _hint(m, "ret", 136.0)
+    mir_dy = _hint(m, "mir", 13.0)
+    pin_dy = _hint(m, "pin", 29.7)
     heads: list[float] = []
 
     for pos in b.regular + b.special:
         ch, x = pos.ch, pos.x
         S.pin_top(p, x, bottom)
-        p.text(x, bottom - 29.7, ch.pin, S.PIN, "center")
+        p.text(x, bottom - pin_dy, ch.pin, S.PIN, "center")
         # подписи: при 4+ строках блок выше; одиночная подпись справа — по центру
-        dy = top + 68.2 - max(0, rows - 3) * 3.6
+        dy = top + _hint(m, "desc", 68.2 - max(0, rows - 3) * 3.6)
         if pos not in b.regular and rows > 3:
             n_own = len(S.desc_lines(ch.desc, 60.0)[0])
             dy += (rows - n_own) * 9.2 / 2
@@ -387,7 +446,7 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
             if el == COIL:
                 if not mir:
                     mir = [("co", ch.ref)]
-                S.mirror(p, x, ret_y + 13.0, [(k if k != "btn" else "no", r) for k, r in mir])
+                S.mirror(p, x, ret_y + mir_dy, [(k if k != "btn" else "no", r) for k, r in mir])
         else:
             y_tip = bottom + 88.6
             S.wire(p, x, wire_top, y_tip)
@@ -402,9 +461,12 @@ def _draw_out(p: Pen, b: _Block, xr: XRef) -> None:
             S.drop_bus(p, sorted(heads), bus_y, up=True)
         # общий провод катушек: от шины вниз и влево к стрелке
         p.vline(first, bus_y, ret_y, S.LW)
-        tip = b.x0 + 5.6
+        tip = b.x0 + _hint(m, "ret_tip", 5.6)
         p.hline(tip, first, ret_y, S.LW)
         if m.common_wire:
             S.hwire_mark(p, tip + 5.7, ret_y, m.common_wire)
         if m.common:
             S.arrow_in_from_left(p, tip, ret_y, m.common)
+        if b.column:                                  # сигнальная колонна под выходами
+            from . import column as C
+            C.draw(p, b.column, first, ret_y, xr)

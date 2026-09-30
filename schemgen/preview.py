@@ -199,6 +199,16 @@ def changed_keys(old: dict, new: dict) -> list[str]:
     olk = _by(on.get("links"), lambda l: _k(l.get("cable")))
     out += ["-" + c.lstrip("-") for c, l in _by(nn.get("links"), lambda l: _k(l.get("cable"))).items()
             if olk.get(c) != l]
+    # коробки / внешние шкафы: изменённые клеммники
+    ofg = {(_k(a.get("zone")), _k(g.get("block"))): g for a in old.get("fields") or []
+           for g in a.get("groups") or []}
+    for a in new.get("fields") or []:
+        for g in a.get("groups") or []:
+            if ofg.get((_k(a.get("zone")), _k(g.get("block")))) != g:
+                out.append("-" + _k(g.get("block")).lstrip("-"))
+    # сигнальная колонна
+    if (old.get("column") or None) != (new.get("column") or None) and new.get("column"):
+        out.append(_k(new["column"].get("tag")) or "-HL1")
     # спецификация: новые/изменённые строки — их обозначения
     osp = [dict(r) for r in old.get("spec") or []]
     for r in new.get("spec") or []:

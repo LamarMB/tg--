@@ -91,3 +91,4 @@ class Document:
     frozen: list = field(default_factory=list)    # template.Frozen — листы из образца
     network: object = None                        # e3.network.Network
     fields: list = field(default_factory=list)    # list[e3.field.FieldArea]
+    column: object = None                         # e3.column.Column — сигнальная колонна

@@ -160,6 +160,11 @@ SYSTEM = """Ты — инженер-проектировщик АСУ ТП (шк
    link — куда в шкафу (-CPU:A1, -2QFU1:1), caption — подпись внизу, bridge).
    Правка: присылай зону с n и изменённые группы целиком; удалённые группы —
    remove_field_groups «n:1XT3».
+6е. Сигнальная колонна (column): tag -HL1, title, feed_wire, feed_next (-1K1:13+),
+   lamps: pin 1…, color GN/YL/RD/BZ, kind лампа/зуммер, relay -K1 (катушка на выходе ПЛК),
+   wire, при цепи через перекидной контакт другого реле — relay_wire, via -KBF1,
+   via_pins «11/14/12»; common_pin 0, common_link -XM1:M3, common_wire.
+   Правка: присылай колонну целиком.
 7. Открытые пункты. Если в запросе перечислены открытые пункты (вопросы и допущения
    с номерами), сообщение пользователя может быть ответом на них («1 да», «3 — реле
    на 230 В», «всё ок»). Внеси изменения по ответу, номера закрытых пунктов верни в
@@ -351,6 +356,18 @@ TOOL = {
                         "link": _str("-CPU:A1, -2QFU1:1"), "ref": _str("ссылка вручную"),
                         "caption": _str("подпись внизу, строки через \\n"),
                         "bridge": _str("перемычка")}}}}}}}}},
+            "column": {"type": "object", "description": "Сигнальная колонна под выходами ПЛК",
+                       "properties": {
+                "tag": _str("-HL1"), "title": _str("Сигнальная колонна"), "feed_wire": WIRE,
+                "feed_next": _str("-1K1:13+"), "feed_next_ref": _str("ссылка вручную"),
+                "common_pin": _str("0"), "common_link": _str("-XM1:M3"),
+                "common_ref": _str("ссылка вручную"), "common_wire": WIRE,
+                "lamps": {"type": "array", "items": {"type": "object", "properties": {
+                    "pin": _str("1"), "color": _str("GN / YL / RD / BZ"),
+                    "kind": {"type": "string", "enum": ["лампа", "зуммер"]},
+                    "relay": _str("-K1"), "wire": WIRE, "relay_wire": WIRE,
+                    "via": _str("-KBF1"), "via_pins": _str("11/14/12"),
+                    "via_ref": _str("ссылка вручную")}}}}},
             "remove_field_groups": {"type": "array", "items": {"type": "string"},
                                     "description": "«n:клеммник» — группы, которые удалить"},
             "remove_network_items": {"type": "array", "items": {"type": "string"},
@@ -413,7 +430,7 @@ TOOL = {
 }
 
 SECTIONS = ("project", "spec", "terminals", "plc", "power24", "feeders", "mains", "network",
-            "fields")
+            "fields", "column")
 
 
 class AssistantError(Exception):
@@ -423,7 +440,7 @@ class AssistantError(Exception):
 # Разделы разбираются параллельно отдельными запросами: полный проект шкафа не
 # помещается в один ответ модели.
 GROUPS = [("project", "spec"), ("terminals",), ("plc",), ("power24", "feeders"),
-          ("mains",), ("network",), ("fields",)]   # см. STAGES — порядок разбора
+          ("mains",), ("network",), ("fields",), ("column",)]   # см. STAGES — порядок разбора
 GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спецификация",
                "terminals": "клеммники", "plc": "модули ПЛК и каналы",
                "power24": "распределение питания 24 В (автоматы QFU, шина минусов)",
@@ -433,7 +450,8 @@ GROUP_NAMES = {"project": "реквизиты проекта", "spec": "спец
                "network": "сеть: коммутаторы, ПК, панель, кабели Ethernet/USB/HDMI, "
                           "панельные разъёмы",
                "fields": "коробки и внешние шкафы: полевые кабели, клеммники 1XT/2XT/3XT, "
-                         "реле CPW"}
+                         "реле CPW",
+               "column": "сигнальная колонна HL1 (лампы, зуммер, реле K1…)"}
 
 
 def _tool_for(sections) -> dict:
@@ -540,7 +558,8 @@ def _call(api_key, current, message, sections, model, url, timeout,
 
 # Порядок разбора: сначала ПЛК, потом питание (зная, что нужно запитать), потом
 # клеммники и спецификация (зная всё остальное). Внутри этапа — параллельно.
-STAGES = [[("plc",)], [("mains",), ("network",), ("fields",)], [("power24", "feeders")],
+STAGES = [[("plc",)], [("mains",), ("network",), ("fields",), ("column",)],
+          [("power24", "feeders")],
           [("project", "spec"), ("terminals",)]]
 
 
@@ -673,6 +692,8 @@ def merge(current: dict, update: dict) -> dict:
                     items[idx] = n
             net[part] = items
         out["network"] = net
+    if update.get("column"):
+        out["column"] = update["column"]
     fl = update.get("fields") or []
     rmf = {str(x).strip().upper() for x in update.get("remove_field_groups") or []}
     if fl or rmf:

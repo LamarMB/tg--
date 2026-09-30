@@ -3,21 +3,31 @@ from __future__ import annotations
 
 from .model import INPUT_ELEMENTS, OUTPUT_ELEMENTS, PlcChannel, PlcModule
 
+LAYOUT_KEYS = ("x0", "x1", "top", "h", "desc", "mark", "tip", "com_y", "com_dx", "pin", "coil",
+               "bus", "ret", "mir", "ret_tip")
+
+
 def layout_to_text(layout: dict) -> str:
-    xs = (layout or {}).get("xs") or {}
-    return "; ".join(f"{k}={v:g}" for k, v in xs.items())
+    layout = layout or {}
+    parts = [f"{k}={layout[k]:g}" for k in LAYOUT_KEYS if k in layout]
+    parts += [f"{k}={v:g}" for k, v in (layout.get("xs") or {}).items()]
+    return "; ".join(parts)
 
 
 def layout_from_text(s: str) -> dict:
-    xs = {}
-    for part in str(s or "").replace(",", ";").split(";"):
+    out, xs = {}, {}
+    for part in str(s or "").split(";"):
         if "=" in part:
             k, v = part.split("=", 1)
+            k = k.strip()
             try:
-                xs[k.strip()] = float(v.strip().replace(" ", ""))
+                val = float(v.strip().replace(" ", "").replace(",", "."))
             except ValueError:
-                pass
-    return {"xs": xs} if xs else {}
+                continue
+            (out if k in LAYOUT_KEYS else xs)[k] = val
+    if xs:
+        out["xs"] = xs
+    return out
 
 
 MOD_COLS = ["Модуль", "Позиция", "Тип", "Вид", "Ссылка", "Стрелка слева", "Стрелка вправо",
@@ -530,3 +540,48 @@ def write_fields(wb, areas, header) -> None:
                                       t.device, t.param.replace("\n", "\\n"), t.link, t.ref,
                                       t.caption.replace("\n", "\\n"), t.bridge])
                 first = first_area = False
+
+
+# ------------------------------------------------------------ Сигнальная колонна
+C_COLS = ["Тип", "Вывод", "Цвет", "Вид", "Реле", "Марка провода", "Цвет провода", "Сечение",
+          "Провод от реле", "Через контакт", "Выводы контакта", "Ссылка", "Связь"]
+
+
+def read_column(wb, find_sheet, table, problems):
+    from .column import ColLamp, Column
+    ws = find_sheet(wb, "Колонна", False, problems)
+    if ws is None:
+        return None
+    col = Column()
+    for r in table(ws, C_COLS, problems):
+        kind = r["Тип"].strip().lower()
+        wire = [r["Марка провода"], r["Цвет провода"], r["Сечение"]]
+        if kind == "колонна":
+            col.tag, col.title = _t(r["Реле"]) or col.tag, r["Цвет"] or col.title
+        elif kind == "питание":
+            col.feed_wire, col.feed_next, col.feed_next_ref = wire, r["Связь"], r["Ссылка"]
+        elif kind == "общий":
+            col.common_pin, col.common_link, col.common_ref = r["Вывод"] or "0", r["Связь"], r["Ссылка"]
+            col.common_wire = wire
+        elif kind == "сегмент":
+            rw = [x.strip() for x in r["Провод от реле"].split("/")] if r["Провод от реле"] else []
+            col.lamps.append(ColLamp(r["Вывод"], r["Цвет"], r["Вид"] or "лампа", _t(r["Реле"]),
+                                     wire, rw, _t(r["Через контакт"]),
+                                     r["Выводы контакта"] or "11/14/12", r["Ссылка"]))
+    return col if col else None
+
+
+def write_column(wb, col, header) -> None:
+    if not col:
+        return
+    ws = wb.create_sheet("Колонна")
+    header(ws, C_COLS, [10, 7, 18, 9, 8, 12, 10, 8, 18, 12, 12, 8, 14])
+    fw = (list(col.feed_wire) + ["", "", ""])[:3]
+    cw = (list(col.common_wire) + ["", "", ""])[:3]
+    ws.append(["колонна", "", col.title, "", col.tag, "", "", "", "", "", "", "", ""])
+    ws.append(["питание", "", "", "", "", *fw, "", "", "", col.feed_next_ref, col.feed_next])
+    for l in col.lamps:
+        w = (list(l.wire) + ["", "", ""])[:3]
+        ws.append(["сегмент", l.pin, l.color, l.kind, l.relay, *w, " / ".join(l.relay_wire),
+                   l.via, l.via_pins if l.via else "", l.via_ref, ""])
+    ws.append(["общий", col.common_pin, "", "", "", *cw, "", "", "", col.common_ref, col.common_link])

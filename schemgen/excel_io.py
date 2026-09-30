@@ -202,6 +202,8 @@ def read_document(path: str | Path) -> Document:
     net = read_network(wb, _sheet, _table, problems)
     from .e3.excel import read_fields
     fields = read_fields(wb, _sheet, _table, problems)
+    from .e3.excel import read_column
+    column = read_column(wb, _sheet, _table, problems)
     frozen = _read_frozen(wb)
     p24 = read_power24(wb, _sheet, _table, problems)
     feeders = read_feeders(wb, _sheet, _table, problems)
@@ -211,7 +213,7 @@ def read_document(path: str | Path) -> Document:
         problems.append("В файле нет ни строк спецификации, ни клемм, ни каналов ПЛК.")
     if problems:
         raise TemplateError(problems)
-    return Document(project, spec, blocks, plc, p24, feeders, mains, frozen, net, fields)
+    return Document(project, spec, blocks, plc, p24, feeders, mains, frozen, net, fields, column)
 
 
 FROZEN_COLS = ["Лист схемы", "Страница образца", "Файл образца", "Разделы", "Отпечаток"]
@@ -293,6 +295,8 @@ def write_workbook(path: str | Path, doc: Document | None = None) -> None:
     write_network(wb, doc.network if doc else None, _header)
     from .e3.excel import write_fields
     write_fields(wb, doc.fields if doc else [], _header)
+    from .e3.excel import write_column
+    write_column(wb, doc.column if doc else None, _header)
     if doc and doc.frozen:
         ws = wb.create_sheet("Шаблон")
         _header(ws, FROZEN_COLS, [10, 12, 20, 30, 36])
